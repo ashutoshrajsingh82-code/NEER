@@ -1,0 +1,23 @@
+{
+  "name": "neer-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NEER — Neural Embedding based Estimation and Reconstruction (SIH26066, MoES/INCOIS) frontend",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.2.35",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0"
+  }
+}

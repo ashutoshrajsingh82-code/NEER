@@ -1,0 +1,34 @@
+# NEER — root Python dependencies
+# Neural Embedding based Estimation and Reconstruction (SIH26066, MoES/INCOIS)
+#
+# This covers shared/config tooling, the backend API, and core geographic
+# grid utilities. ML/model dependencies (torch, scikit-learn, etc.) will
+# be added once the modeling work begins.
+
+-r backend/requirements.txt
+
+PyYAML==6.0.2
+python-dotenv==1.0.1
+pytest==8.3.3
+httpx==0.27.2
+numpy>=2,<3
+
+# Data loading layer (src/data/loaders)
+#
+# pandas backs the CSV loader. xarray + netCDF4 back the NetCDF loader and
+# are imported lazily: the CSV/NumPy/demo paths, the backend, and the test
+# suite all work without them installed, and load_netcdf() raises a
+# MissingDependencyError naming the install command rather than failing at
+# import time. The NetCDF tests skip themselves when they are absent.
+pandas>=2,<4
+xarray>=2024.1
+netCDF4>=1.6
+
+# PyTorch Dataset layer (src/data/dataset.py, Phase 12)
+#
+# Optional, same lazy-import treatment as xarray/netCDF4 above: importing
+# src/data/dataset.py works without torch installed, and constructing a
+# NEERDataset without it raises MissingDependencyError naming this
+# install command. No model architecture depends on this yet (Phase 12
+# is the Dataset/DataLoader layer only — see MODEL_CARD.md).
+torch>=2.2

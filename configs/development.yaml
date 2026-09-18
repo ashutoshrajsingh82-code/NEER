@@ -1,0 +1,14 @@
+# NEER — Development environment overrides
+# Deep-merged on top of configs/base.yaml by src/utils/config.py.
+#
+# Only values that differ from the base config belong here. The spatial
+# domain, depth levels, project metadata, and model hyperparameters are
+# defined once in configs/base.yaml and are NOT duplicated in this file.
+
+environment: "development"
+
+# Local development keeps the demo dataset available for quick iteration,
+# but uses its own seed so demo runs and dev runs are distinguishable.
+demo:
+  enabled: true
+  seed: 7

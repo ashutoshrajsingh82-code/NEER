@@ -1,0 +1,151 @@
+# NEER — Base Configuration
+# Neural Embedding based Estimation and Reconstruction
+# SIH Problem Statement: SIH26066 · Organization: MoES / INCOIS
+#
+# This file is the SINGLE SOURCE OF TRUTH for values shared across all
+# environments (project metadata, spatial domain, depth levels, model
+# hyperparameters, demo defaults, and shared paths/service settings).
+#
+# configs/demo.yaml, configs/development.yaml and configs/production.yaml
+# do NOT repeat these values — they only declare what differs for that
+# environment. src/utils/config.py deep-merges the requested environment
+# file on top of this one, so loading any environment always yields the
+# full set of sections (project, domain, depths, model, demo, ...).
+
+environment: "base"
+
+project:
+  name: "NEER"
+  full_name: "Neural Embedding based Estimation and Reconstruction"
+  problem_id: "SIH26066"
+  organization: "MoES / INCOIS"
+
+domain:
+  lat_min: 5
+  lat_max: 30
+  lon_min: 45
+  lon_max: 105
+  resolution: 0.25
+
+depths:
+  - 0
+  - 5
+  - 10
+  - 20
+  - 30
+  - 50
+  - 75
+  - 100
+  - 125
+  - 150
+  - 200
+  - 300
+  - 500
+  - 700
+  - 1000
+
+model:
+  embedding_dim: 256
+  use_gnn: false
+
+demo:
+  enabled: true
+  seed: 42
+
+paths:
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  data_demo: "data/demo"
+  artifacts_checkpoints: "artifacts/checkpoints"
+  artifacts_embeddings: "artifacts/embeddings"
+  artifacts_predictions: "artifacts/predictions"
+  reports: "reports"
+
+backend:
+  host: "0.0.0.0"
+  port: 8000
+
+frontend:
+  port: 3000
+
+# Preprocessing pipeline (src/data/preprocessing).
+#
+# Consumed by PreprocessingPipeline.from_config(). Every key is optional:
+# anything omitted falls back to the step's own default, so only choices
+# the project wants to pin down are stated here. Each sub-section maps
+# one-to-one onto a step's constructor arguments.
+preprocessing:
+
+  # Stage 1 — coordinate normalization.
+  # 0-360 keeps the NEER domain (45E-105E) contiguous and positive.
+  coordinates:
+    lon_convention: "0-360"
+    sort_ascending: true
+    decimals: 6
+
+  # Stage 2 — temporal alignment.
+  # Monthly is the cadence the subsurface targets can actually support:
+  # ARGO coverage of this basin is too sparse for a daily field.
+  temporal:
+    frequency: "monthly"
+    aggregation: "mean"
+    fill_gaps: true
+
+  # Stage 3 — spatial alignment onto the `domain` grid defined above.
+  # Masks are resampled by nearest neighbour; a land mask averaged to 0.5
+  # is meaningless.
+  spatial:
+    method: "linear"
+    mask_method: "nearest"
+
+  # Stage 4 — missing-value handling (LEARNED: fitted on the training
+  # period only). Strategies are tried in order on whatever is still
+  # missing. max_gap is in timesteps, so 2 means a two-month hole between
+  # two observed months may be bridged; anything longer falls through to
+  # the climatology.
+  missing:
+    strategies: ["temporal_interpolate", "climatology", "global_mean"]
+    max_gap: 2
+    emit_observed_masks: true
+    ocean_only: true
+
+  # Stage 5 — masking.
+  masking:
+    mask_variable: "land_mask"
+    publish_ocean_mask: true
+
+  # Stage 6 — feature construction.
+  # Builds exactly the derived channels the authoritative NEER input set
+  # needs (see src/data/preprocessing/channels.py): the cyclic time
+  # encoding and normalized position. current_speed/wind_speed/coriolis
+  # are still available via FeatureBuilder for ad hoc use but are not
+  # part of the model's fixed eleven input channels.
+  features:
+    features: ["cyclic_time", "position"]
+
+  # Stage 7 — normalization (LEARNED: fitted on the training period only).
+  # Per depth level, because the vertical temperature gradient is far
+  # larger than the horizontal one: one set of statistics for the whole
+  # column would leave the deep levels numerically flat.
+  normalization:
+    method: "zscore"
+    per_depth_level: true
+
+  # Chronological split. The last 15% of the time axis is the test
+  # period and the 15% before it is validation; never random, because
+  # ocean fields are strongly autocorrelated in time.
+  split:
+    val_fraction: 0.15
+    test_fraction: 0.15
+
+  # Stage 8 — tensor assembly.
+  # input_variables is left unset so TensorAssembler uses its default:
+  # channels.NEER_CHANNEL_ORDER, the authoritative, fixed 11-channel
+  # input contract every NEER model is built against.
+  tensors:
+    target_variables: ["subsurface_temp"]
+    fill_value: 0.0
+
+# Training configuration is intentionally left empty.
+# The ML model/training loop is not implemented in this phase.
+training: {}

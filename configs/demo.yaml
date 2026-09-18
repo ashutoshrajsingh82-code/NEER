@@ -1,0 +1,16 @@
+# NEER — Demo environment overrides
+# Deep-merged on top of configs/base.yaml by src/utils/config.py.
+#
+# Only values that differ from the base config belong here. The spatial
+# domain, depth levels, project metadata, and model hyperparameters are
+# defined once in configs/base.yaml and are NOT duplicated in this file —
+# loading this environment still resolves to the full config (project,
+# domain, depths, model, demo, ...) via the merge.
+
+environment: "demo"
+
+# Demo environment always runs with the demo dataset/pipeline enabled,
+# using the same fixed seed as the base defaults for reproducibility.
+demo:
+  enabled: true
+  seed: 42

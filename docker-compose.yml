@@ -1,0 +1,34 @@
+version: "3.9"
+
+# NEER — Neural Embedding based Estimation and Reconstruction
+# SIH26066 · MoES / INCOIS
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neer-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - NEER_ENVIRONMENT=development
+    volumes:
+      - ./backend:/app/backend
+      - ./src:/app/src
+      - ./configs:/app/configs
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: neer-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
