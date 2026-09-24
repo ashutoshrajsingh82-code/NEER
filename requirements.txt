@@ -32,3 +32,20 @@ netCDF4>=1.6
 # install command. No model architecture depends on this yet (Phase 12
 # is the Dataset/DataLoader layer only — see MODEL_CARD.md).
 torch>=2.2
+
+# Baseline models & common evaluation interface (src/models/baselines,
+# src/evaluation, Phase 24)
+#
+# scikit-learn backs the Ridge regression baseline. Same lazy-import
+# treatment as torch/xarray/netCDF4 above: importing
+# src/models/baselines/ridge.py works without it installed, and only
+# constructing RidgeBaseline raises MissingDependencyError naming this
+# install command.
+scikit-learn>=1.3
+
+# lightgbm backs the optional LightGBM baseline
+# (src/models/baselines/lightgbm_baseline.py). Not required — the
+# climatology and Ridge baselines, and scripts/evaluate_baselines.py
+# itself, work fully without it; is_lightgbm_available() lets callers
+# skip it gracefully. Uncomment to enable it:
+# lightgbm>=4.0
