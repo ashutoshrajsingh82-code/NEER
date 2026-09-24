@@ -1,5 +1,6 @@
+from conftest import corrupt
 """
-Validation tests against the demo dataset — clean and deliberately corrupted.
+Validation tests against the demo dataset â€” clean and deliberately corrupted.
 
 Phase 06 asks for both halves, and the pairing is what makes the layer
 trustworthy:
@@ -7,7 +8,7 @@ trustworthy:
 * the real demo dataset must validate cleanly (no errors, no warnings), so
   the rules are not producing noise on known-good data, and
 * the same dataset, damaged in one specific way, must be caught on the
-  right check with the right severity — so the rules are not merely
+  right check with the right severity â€” so the rules are not merely
   passing everything.
 
 `conftest.corrupt` builds each damaged variant from copies, never touching
@@ -24,7 +25,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from conftest import corrupt  # noqa: E402
+
 
 from src.data.loaders import load_demo_dataset
 from src.data.validation import (
@@ -127,7 +128,7 @@ def test_corrupted_resolution_is_caught(demo_dataset):
 
 
 def test_coarsened_grid_warns_rather_than_erroring(demo_dataset):
-    coarse = demo_dataset.lat[::4]  # a regular 1.0° axis
+    coarse = demo_dataset.lat[::4]  # a regular 1.0Â° axis
     values = demo_dataset["sst"].values[:, ::4, :]
     broken = corrupt(demo_dataset, coords={"lat": coarse}, values={"sst": values},
                      drop=tuple(n for n in demo_dataset.variable_names if n != "sst"))
@@ -409,7 +410,7 @@ def test_scientific_layer_agrees_with_the_loader_gate_on_clean_data():
 
 
 def test_scientific_layer_catches_what_the_loader_gate_permits(demo_dataset):
-    # A 1° grid loads fine structurally but is not the configured grid;
+    # A 1Â° grid loads fine structurally but is not the configured grid;
     # only the scientific layer has an opinion about that.
     coarse_lat = demo_dataset.lat[::4]
     values = demo_dataset["sst"].values[:, ::4, :]
@@ -423,3 +424,4 @@ def test_scientific_layer_catches_what_the_loader_gate_permits(demo_dataset):
 
     assert structural_validate(broken, check_domain=False).ok
     assert validate(broken).check("resolution").status is ValidationStatus.WARNING
+

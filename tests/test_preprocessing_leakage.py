@@ -1,3 +1,4 @@
+from conftest import tiny_dataset
 """Tests for the NEER preprocessing leakage guarantees
 (src/data/preprocessing/splits.py and the pipeline's fit/transform
 discipline). Phase 07.
@@ -11,9 +12,9 @@ than comments:
 2. **Nothing is transformed across a period boundary.** Tested by the
    perturbation test below: corrupt every held-out timestep beyond
    recognition, re-run, and require that not one number in the training
-   tensors moved. If any stage reached across the boundary — a temporal
+   tensors moved. If any stage reached across the boundary â€” a temporal
    interpolation bridging the last training month from the first
-   validation month, a statistic pooled over everything — that test goes
+   validation month, a statistic pooled over everything â€” that test goes
    red.
 """
 
@@ -37,7 +38,7 @@ from src.data.preprocessing import (  # noqa: E402
     check_disjoint,
 )
 from src.data.preprocessing.missing import interpolate_along_time  # noqa: E402
-from conftest import tiny_dataset  # noqa: E402
+
 
 MONTHS = np.array(
     ["2020-01-01", "2020-02-01", "2020-03-01", "2020-04-01"], dtype="datetime64[ns]"
@@ -302,3 +303,4 @@ def test_missing_handler_does_not_refit_its_climatology_at_transform_time():
     fitted = step.state()
     step.transform(tiny_dataset(seed=99))
     assert step.state() == fitted
+

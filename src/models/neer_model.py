@@ -1,0 +1,232 @@
+"""
+Phase 18 — the complete NEER model.
+
+Wires every previous phase into one `torch.nn.Module`, exactly the
+pipeline this phase describes:
+
+    (batch, NEER_N_CHANNELS, lat, lon)   input surface fields
+    -> CNNEncoder                          (Phase 13)
+    -> VisionTransformer                   (Phase 14)
+    -> get_embedding                       (Phase 15) -> (batch, 256)
+    -> DepthEmbedding, inside DepthDecoder (Phase 16)
+    -> DepthDecoder                        (Phase 17) -> (batch, 15) anomalies
+    -> + climatology                       (Phase 11, src.data.preprocessing.climatology)
+    -> reconstructed absolute temperature, (batch, 15)
+
+`NEERModel` does not introduce any new learnable computation of its
+own — every weight belongs to the `CNNViTEncoder` or `DepthDecoder` it
+holds. It exists purely to compose them under one object with one
+clear input contract, and to attach the one non-learned step the
+pipeline still needs: turning a predicted anomaly back into a
+physical-units temperature by adding it to a climatological baseline
+(Phase 11's `MonthlyClimatology`, which is fitted separately, from
+data this tensor-only model never sees — lat/lon/time metadata, not
+surface-field channels).
+
+Do not train yet
+------------------
+This phase is architecture wiring and a forward-pass smoke test only.
+There is no loss function, optimizer, or training loop here, and
+nothing in this module fits anything — every learnable parameter comes
+from previously-tested, freshly-initialized sub-modules. See
+`tests/test_neer_model.py`'s `test_complete_cpu_forward_pass` for the
+full, untrained, CPU-only pipeline check this phase asks for.
+"""
+
+from __future__ import annotations
+
+from typing import Optional, Union
+
+from src.data.loaders.errors import MissingDependencyError
+from src.models.depth_decoder import DepthDecoderConfig
+from src.models.encoder import CNNEncoderConfig
+from src.models.vit import ViTConfig
+
+try:  # pragma: no cover - environment dependent
+    import torch
+    import torch.nn as nn
+
+    _TORCH_AVAILABLE = True
+except ImportError:  # pragma: no cover - environment dependent
+    torch = None  # type: ignore[assignment]
+    nn = None  # type: ignore[assignment]
+    _TORCH_AVAILABLE = False
+
+
+def _require_torch() -> None:
+    if not _TORCH_AVAILABLE:
+        raise MissingDependencyError(
+            package="torch",
+            purpose="the complete NEER model (src.models.neer_model)",
+            install_hint="pip install torch",
+        )
+
+
+if _TORCH_AVAILABLE:
+
+    class NEERModel(nn.Module):
+        """The complete NEER model: surface fields in, a depth-temperature
+        profile out.
+
+        Composes a `CNNViTEncoder` (Phases 13-15: CNN -> ViT -> pooled
+        `(batch, embed_dim)` embedding) with a `DepthDecoder` (Phases
+        16-17: shared depth embeddings + shared cross-attention -> 15
+        anomalies). `decoder_config`'s `embed_dim` must match the
+        encoder's (derived automatically when omitted, same pattern as
+        `CNNViTEncoder` deriving `ViTConfig` from the CNN's output
+        width).
+
+        Examples
+        --------
+        >>> model = NEERModel().eval()
+        >>> x = torch.randn(2, NEER_N_CHANNELS, 101, 241)
+        >>> model(x).shape                    # forward(): anomalies
+        torch.Size([2, 15])
+        >>> model.get_embedding(x).shape      # get_embedding(): Phase 15's representation
+        torch.Size([2, 256])
+        >>> climatology = torch.zeros(15)     # a real caller uses MonthlyClimatology here
+        >>> model.predict_profile(x, climatology).shape
+        torch.Size([2, 15])
+        """
+
+        def __init__(
+            self,
+            cnn_config: Optional[CNNEncoderConfig] = None,
+            vit_config: Optional[ViTConfig] = None,
+            decoder_config: Optional[DepthDecoderConfig] = None,
+        ) -> None:
+            _require_torch()
+            super().__init__()
+            # Imported here so a torch-less environment still reaches
+            # `_require_torch` above with the helpful error first (same
+            # reasoning as `CNNViTEncoder`'s own deferred import).
+            from src.models.depth_decoder import DepthDecoder
+            from src.models.vit import CNNViTEncoder
+
+            self.encoder = CNNViTEncoder(cnn_config, vit_config)
+            embed_dim = self.encoder.embed_dim
+
+            if decoder_config is None:
+                decoder_config = DepthDecoderConfig(embed_dim=embed_dim)
+            elif decoder_config.embed_dim != embed_dim:
+                raise ValueError(
+                    f"DepthDecoderConfig.embed_dim ({decoder_config.embed_dim}) must equal "
+                    f"the encoder's embed_dim ({embed_dim})"
+                )
+            self.decoder = DepthDecoder(decoder_config)
+
+        @property
+        def in_channels(self) -> int:
+            return self.encoder.in_channels
+
+        @property
+        def embed_dim(self) -> int:
+            return self.encoder.embed_dim
+
+        @property
+        def depths(self):
+            """The `num_depths` target depths, in `forward`'s output-column order."""
+            return self.decoder.depths
+
+        @property
+        def num_depths(self) -> int:
+            return self.decoder.num_depths
+
+        def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+            """
+            Parameters
+            ----------
+            x:
+                `(batch, NEER_N_CHANNELS, H, W)` surface fields.
+
+            Returns
+            -------
+            `(batch, num_depths)` predicted temperature anomalies
+            (delta_T), one per `self.depths`, in that exact order.
+            """
+            embedding = self.encoder.get_embedding(x)
+            return self.decoder(embedding)
+
+        def get_embedding(self, x: "torch.Tensor") -> "torch.Tensor":
+            """The Phase 15 spatial embedding, exposed at the whole-model level.
+
+            Parameters
+            ----------
+            x:
+                `(batch, NEER_N_CHANNELS, H, W)` surface fields.
+
+            Returns
+            -------
+            `(batch, embed_dim)` — exactly
+            `self.encoder.get_embedding(x)`, i.e. the same pooled
+            representation `forward` builds its anomaly prediction
+            from, not a separate computation.
+            """
+            return self.encoder.get_embedding(x)
+
+        def predict_profile(
+            self, x: "torch.Tensor", climatology: Union["torch.Tensor", "object"]
+        ) -> "torch.Tensor":
+            """Full inference: surface fields -> reconstructed temperature profile.
+
+            Runs `forward` to get predicted anomalies, then adds the
+            supplied climatology — `climatology + predicted_delta_T`,
+            exactly the formula in
+            `src.data.preprocessing.climatology.reconstruct_temperature`.
+            This method reimplements that one-line addition for torch
+            tensors (rather than calling the numpy version directly)
+            so the whole pipeline stays in torch with no CPU/numpy
+            round-trip; the underlying relationship, and where a real
+            climatology profile comes from, is documented there.
+
+            Parameters
+            ----------
+            x:
+                `(batch, NEER_N_CHANNELS, H, W)` surface fields.
+            climatology:
+                Array-like, convertible to a tensor of shape
+                `(num_depths,)` or `(batch, num_depths)` — the
+                climatological baseline temperature at each target
+                depth. A `(num_depths,)` profile is broadcast across
+                the batch; a per-sample `(batch, num_depths)` array is
+                used as-is (the usual case, since climatology varies
+                by each sample's location and calendar month — see
+                `MonthlyClimatology.depth_profile`).
+
+            Returns
+            -------
+            `(batch, num_depths)` reconstructed absolute temperature,
+            in whatever physical units `climatology` was given in.
+            """
+            anomalies = self.forward(x)
+
+            climatology_t = (
+                climatology
+                if torch.is_tensor(climatology)
+                else torch.as_tensor(climatology, dtype=torch.float32)
+            )
+            climatology_t = climatology_t.to(dtype=anomalies.dtype, device=anomalies.device)
+
+            if climatology_t.shape == (self.num_depths,):
+                climatology_t = climatology_t.unsqueeze(0).expand_as(anomalies)
+            elif climatology_t.shape != anomalies.shape:
+                raise ValueError(
+                    f"climatology has shape {tuple(climatology_t.shape)}; expected "
+                    f"({self.num_depths},) or {tuple(anomalies.shape)}"
+                )
+
+            return climatology_t + anomalies
+
+        def __repr__(self) -> str:  # pragma: no cover - cosmetic
+            return (
+                f"NEERModel(in_channels={self.in_channels}, embed_dim={self.embed_dim}, "
+                f"num_depths={self.num_depths})"
+            )
+
+else:  # pragma: no cover - exercised only in a torch-less environment
+
+    class NEERModel:  # type: ignore[no-redef]
+        """Placeholder used when torch is not installed (see `encoder.CNNEncoder`)."""
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            _require_torch()

@@ -1,4 +1,5 @@
-"""Tests for Phase 10 — normalization
+from conftest import tiny_dataset
+"""Tests for Phase 10 â€” normalization
 (src/data/preprocessing/normalization.py, and how the pipeline fits
 and records it).
 
@@ -7,17 +8,17 @@ rather than comments:
 
 1. **Statistics are computed from training data only.** Fitted through
    the pipeline, `Normalizer` never sees a validation or test
-   timestep at `fit` time — `assert_fit_window` (Phase 09) enforces
+   timestep at `fit` time â€” `assert_fit_window` (Phase 09) enforces
    this the same way it does for every learned step.
 2. **Both standardization (zscore) and min-max normalization are
    supported**, and each produces the statistics its name promises:
    zscore centres data to mean 0 / std 1 on the training split;
    min-max maps the training split's own min/max to a fixed range.
-3. **What's fitted is saved** — mean, standard deviation (or min/max
+3. **What's fitted is saved** â€” mean, standard deviation (or min/max
    for the min-max method), and enough metadata to reproduce the
    transform and invert it later.
 4. **The exact same statistics are reused for validation, test and
-   inference** — never recomputed, and unmoved by anything in the
+   inference** â€” never recomputed, and unmoved by anything in the
    held-out data. `test_preprocessing_leakage.py` already proves this
    end-to-end with a full perturbation test; the tests here focus on
    the `Normalizer` contract itself and on what a demo-data run
@@ -42,7 +43,7 @@ from src.data.preprocessing import (  # noqa: E402
     TemporalSplit,
     assert_fit_window,
 )
-from conftest import tiny_dataset  # noqa: E402
+
 
 
 # --------------------------------------------------------------------------
@@ -81,7 +82,7 @@ def test_guard_would_reject_fitting_normalization_outside_training_time():
 
 
 def test_normalizer_never_refits_on_transform():
-    """Calling `transform` on val/test data must not change `_stats` —
+    """Calling `transform` on val/test data must not change `_stats` â€”
     there is no code path in `Normalizer.transform` that calls `fit`."""
     normalizer = Normalizer(per_depth_level=False)
     train = tiny_dataset(with_mask=False, seed=1)
@@ -202,7 +203,7 @@ def test_saved_metadata_survives_a_json_round_trip(preprocessed_demo, tmp_path):
 
 def test_transform_applies_the_fitted_statistics_not_the_data_shown_to_it():
     """Mathematically verify a held-out value is normalized with the
-    *training* mean/std, not its own — the only way "same statistics
+    *training* mean/std, not its own â€” the only way "same statistics
     at val/test/inference" is actually true rather than incidental."""
     train = tiny_dataset(with_mask=False, seed=0)
     step = Normalizer(method="zscore", per_depth_level=False)
@@ -232,7 +233,7 @@ def test_repeated_transforms_of_different_data_use_identical_statistics():
 
 def test_pipeline_transform_reuses_exactly_the_fitted_statistics(demo_dataset):
     """The inference path (`pipeline.transform`) must apply the
-    statistics fitted during `run`, unchanged — never recompute them
+    statistics fitted during `run`, unchanged â€” never recompute them
     from whatever it's asked to transform."""
     pipeline = PreprocessingPipeline()
     pipeline.run(demo_dataset)  # fits every learned step, including normalization
@@ -298,7 +299,7 @@ def test_corrupting_held_out_data_leaves_fitted_statistics_unchanged(demo_datase
 
 
 def test_normalized_training_tensor_is_unaffected_by_held_out_corruption(demo_dataset):
-    """Statistics being unchanged is necessary but not sufficient — the
+    """Statistics being unchanged is necessary but not sufficient â€” the
     actually-normalized training *values* must be identical too, which
     only holds if the same statistics were applied both times."""
     baseline = PreprocessingPipeline().run(demo_dataset)
@@ -315,3 +316,4 @@ def test_normalized_training_tensor_is_unaffected_by_held_out_corruption(demo_da
 
     corrupted = PreprocessingPipeline().run(corrupted_dataset, split=baseline.split)
     assert np.array_equal(baseline.train.inputs, corrupted.train.inputs)
+

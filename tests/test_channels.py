@@ -1,7 +1,8 @@
+from conftest import tiny_dataset
 """Tests for the Phase 08 input-feature set
 (src/data/preprocessing/channels.py): the authoritative channel-order
 definition, and that `FeatureBuilder` + `TensorAssembler` build and
-consume exactly it — the eleven channels the model relies on, in the
+consume exactly it â€” the eleven channels the model relies on, in the
 exact order it relies on them.
 """
 
@@ -24,10 +25,10 @@ from src.data.preprocessing import (  # noqa: E402
     TensorAssembler,
     validate_channel_order,
 )
-from conftest import tiny_dataset  # noqa: E402
+
 
 #: The eleven features named in the Phase 08 spec, written out explicitly
-#: so this test fails if `channels.py` is ever edited to something else —
+#: so this test fails if `channels.py` is ever edited to something else â€”
 #: it is checked against the literal list, not re-derived from it.
 EXPECTED_ORDER = (
     "sst",
@@ -78,7 +79,7 @@ def test_validate_channel_order_accepts_the_canonical_order():
 
 
 def test_validate_channel_order_rejects_a_reordering():
-    """Same eleven channels, wrong order — this is the bug that matters most."""
+    """Same eleven channels, wrong order â€” this is the bug that matters most."""
     with pytest.raises(ValueError):
         validate_channel_order(tuple(reversed(NEER_CHANNEL_ORDER)))
 
@@ -101,7 +102,7 @@ def test_validate_channel_order_rejects_an_extra_channel():
 def test_default_feature_builder_produces_only_the_needed_derived_channels():
     """Defaults build the four derived channels Phase 08 needs and nothing
     that isn't part of the fixed input set (no current_speed, wind_speed
-    or coriolis) — those remain available on request, just not by default.
+    or coriolis) â€” those remain available on request, just not by default.
     """
     dataset = tiny_dataset()
     result = FeatureBuilder().transform(dataset)
@@ -146,7 +147,7 @@ def test_each_channel_index_holds_the_named_physical_field(preprocessed_demo):
 
 def test_assembler_raises_when_the_dataset_is_missing_canonical_channels():
     """A dataset that has not been through FeatureBuilder (or is missing raw
-    fields) cannot silently produce a shorter or reordered tensor — the
+    fields) cannot silently produce a shorter or reordered tensor â€” the
     default assembler demands the full eleven or fails loudly.
     """
     with pytest.raises((StepConfigurationError, PreprocessingError)):
@@ -165,3 +166,4 @@ def test_from_config_pipeline_also_uses_the_canonical_order():
     pipeline = PreprocessingPipeline.from_config()
     assembler = pipeline.assembler
     assert tuple(assembler.input_variables) == NEER_CHANNEL_ORDER
+

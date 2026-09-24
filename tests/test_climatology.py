@@ -1,4 +1,5 @@
-"""Tests for Phase 11 — monthly climatology
+from conftest import tiny_dataset
+"""Tests for Phase 11 â€” monthly climatology
 (src/data/preprocessing/climatology.py).
 
 Phase 11 makes four claims. These tests are what make them claims
@@ -7,7 +8,7 @@ rather than comments:
 1. **The climatology is computed from training data only.** Like every
    other learned step, `MonthlyClimatology` refuses to do anything
    before `fit()`, and `fit()` learns only from whatever dataset it is
-   given — nothing outside that call is consulted.
+   given â€” nothing outside that call is consulted.
 2. **Monthly, spatial and depth lookup all work**, and agree with each
    other: `at()` with a depth argument returns the same number
    `depth_profile()` puts at that depth, which is the same number
@@ -15,7 +16,7 @@ rather than comments:
 3. **The mathematical relationship holds exactly**:
    ``delta_T = target_temperature - climatology`` and
    ``temperature_prediction = climatology + predicted_delta_T`` are
-   exact inverses of one another — reconstructing with the true
+   exact inverses of one another â€” reconstructing with the true
    delta_T returns the original temperature, to floating-point
    precision, everywhere the input was finite.
 4. **The fitted climatology survives a save/load round trip**, so it can
@@ -40,11 +41,11 @@ from src.data.preprocessing import (  # noqa: E402
     compute_delta_temperature,
     reconstruct_temperature,
 )
-from conftest import tiny_dataset  # noqa: E402
+
 
 
 def _dataset(**kwargs):
-    """A two-year-ish monthly dataset — enough months to fill every
+    """A two-year-ish monthly dataset â€” enough months to fill every
     calendar bucket with more than one observation."""
     defaults = dict(n_time=30, n_lat=4, n_lon=5, n_depth=3, start="2019-01-15")
     defaults.update(kwargs)
@@ -73,7 +74,7 @@ def test_unfitted_climatology_refuses_every_query():
 
 def test_fit_learns_only_from_the_dataset_it_is_given():
     """Fitting on a training slice never reflects values that only exist
-    in a held-out slice — the direct analogue of the leakage guard the
+    in a held-out slice â€” the direct analogue of the leakage guard the
     other learned steps (`MissingValueHandler`, `Normalizer`) are held
     to."""
     dataset = _dataset()
@@ -366,3 +367,4 @@ def test_pipeline_is_unaffected_by_climatology_being_a_separate_optional_step(pr
     on its own."""
     step_names = [entry["step"] for entry in preprocessed_demo.metadata.steps]
     assert "climatology" not in step_names
+

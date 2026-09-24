@@ -44,7 +44,7 @@ from src.data.preprocessing.splits import (  # noqa: E402
     DEFAULT_VAL_FRACTION,
     split_summary,
 )
-from conftest import tiny_dataset  # noqa: E402
+
 
 MONTHS = np.array(
     [f"2020-{m:02d}-01" for m in range(1, 13)], dtype="datetime64[ns]"

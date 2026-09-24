@@ -1,3 +1,4 @@
+from conftest import tiny_dataset
 """Tests for the NEER preprocessing pipeline as a whole
 (src/data/preprocessing/pipeline.py, tensors.py, metadata.py): ordering,
 the split, tensor shapes and masks, metadata persistence, and the
@@ -28,7 +29,7 @@ from src.data.preprocessing import (  # noqa: E402
     default_steps,
 )
 from src.data.preprocessing.pipeline import concat_along_time  # noqa: E402
-from conftest import tiny_dataset  # noqa: E402
+
 
 
 # --------------------------------------------------------------------------
@@ -302,3 +303,4 @@ def test_assembler_rejects_a_dataset_with_no_usable_channels():
     dataset = tiny_dataset(with_mask=False).subset(["subsurface_temp"])
     with pytest.raises(PreprocessingError):
         TensorAssembler().assemble(dataset)
+

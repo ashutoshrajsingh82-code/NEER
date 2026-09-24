@@ -1,3 +1,4 @@
+from conftest import tiny_dataset
 """Tests for the individual NEER preprocessing steps
 (src/data/preprocessing): the step contract, coordinate normalization,
 temporal alignment, spatial alignment, missing-value handling, masking,
@@ -35,7 +36,7 @@ from src.data.preprocessing.missing import (  # noqa: E402
     OBSERVED_SUFFIX,
     interpolate_along_time,
 )
-from conftest import tiny_dataset  # noqa: E402
+
 
 
 # --------------------------------------------------------------------------
@@ -81,7 +82,7 @@ def test_to_dict_is_json_safe_and_describes_the_step():
 
 
 # --------------------------------------------------------------------------
-# Stage 1 — coordinate normalization
+# Stage 1 â€” coordinate normalization
 # --------------------------------------------------------------------------
 
 
@@ -142,7 +143,7 @@ def test_near_identical_coordinates_are_rounded_together():
 
 
 # --------------------------------------------------------------------------
-# Stage 2 — temporal alignment
+# Stage 2 â€” temporal alignment
 # --------------------------------------------------------------------------
 
 
@@ -187,7 +188,7 @@ def test_unknown_frequency_is_rejected():
 
 
 # --------------------------------------------------------------------------
-# Stage 3 — spatial alignment
+# Stage 3 â€” spatial alignment
 # --------------------------------------------------------------------------
 
 
@@ -237,7 +238,7 @@ def test_matching_grid_is_left_untouched():
 
 
 # --------------------------------------------------------------------------
-# Stage 4 — missing-value handling
+# Stage 4 â€” missing-value handling
 # --------------------------------------------------------------------------
 
 
@@ -293,7 +294,7 @@ def test_missing_handler_must_be_fitted_first():
 
 
 # --------------------------------------------------------------------------
-# Stage 5 — masking
+# Stage 5 â€” masking
 # --------------------------------------------------------------------------
 
 
@@ -320,7 +321,7 @@ def test_masker_without_a_mask_variable_is_a_no_op():
 
 
 # --------------------------------------------------------------------------
-# Stage 6 — feature construction
+# Stage 6 â€” feature construction
 # --------------------------------------------------------------------------
 
 
@@ -368,7 +369,7 @@ def test_target_variables_are_never_used_as_features():
 
 
 # --------------------------------------------------------------------------
-# Stage 7 — normalization
+# Stage 7 â€” normalization
 # --------------------------------------------------------------------------
 
 
@@ -427,3 +428,4 @@ def test_masks_are_never_normalized():
     dataset = tiny_dataset()
     result = Normalizer().fit_transform(dataset)
     assert result["land_mask"].values.dtype == bool
+
