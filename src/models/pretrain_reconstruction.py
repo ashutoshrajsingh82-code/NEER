@@ -427,10 +427,18 @@ class PretrainReconstructionConfig:
             raise ValueError(f"masking_ratio must be in [0.0, 1.0], got {self.masking_ratio}")
 
         if self.encoder_config.embedding_dim != self.embedding_dim:
-            raise ValueError(
-                f"encoder_config.embedding_dim ({self.encoder_config.embedding_dim}) must match "
-                f"embedding_dim ({self.embedding_dim})"
-            )
+            if self.encoder_config == PretrainEncoderConfig():
+                # Default encoder_config was used; align with the explicitly passed embedding_dim
+                object.__setattr__(
+                    self,
+                    "encoder_config",
+                    PretrainEncoderConfig(embedding_dim=self.embedding_dim),
+                )
+            else:
+                raise ValueError(
+                    f"encoder_config.embedding_dim ({self.encoder_config.embedding_dim}) must match "
+                    f"embedding_dim ({self.embedding_dim})"
+                )
 
         if self.decoder_config is not None:
             if self.decoder_config.embed_dim != self.embedding_dim:

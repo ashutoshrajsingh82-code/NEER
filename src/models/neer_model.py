@@ -217,6 +217,16 @@ if _TORCH_AVAILABLE:
 
             return climatology_t + anomalies
 
+        def load_pretrained_encoder(
+            self,
+            checkpoint_path_or_dict: Union[str, Path, dict],
+            strict: bool = True,
+        ) -> None:
+            """Load pretrained CNN and ViT encoder weights from a Phase 21 pretraining checkpoint."""
+            from src.training.pretrain import load_pretrained_into_neer_model
+
+            load_pretrained_into_neer_model(checkpoint_path_or_dict, self, strict=strict)
+
         def __repr__(self) -> str:  # pragma: no cover - cosmetic
             return (
                 f"NEERModel(in_channels={self.in_channels}, embed_dim={self.embed_dim}, "

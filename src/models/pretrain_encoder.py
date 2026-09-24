@@ -256,6 +256,17 @@ if _TORCH_AVAILABLE:
             tokens = self.vit(feature_map)  # (B, n_tokens, embed_dim)
             return tokens.mean(dim=1)  # (B, embed_dim)
 
+        def load_pretrained(
+            self,
+            checkpoint_path_or_dict: "Union[str, Path, dict]",
+            strict: bool = True,
+        ) -> "PretrainEncoder":
+            """Load pretrained encoder weights from a Phase 21 pretraining checkpoint."""
+            from src.training.pretrain import load_pretrained_encoder
+
+            load_pretrained_encoder(checkpoint_path_or_dict, target=self, strict=strict)
+            return self
+
         def __repr__(self) -> str:  # pragma: no cover - cosmetic
             return f"PretrainEncoder(in_channels={self.in_channels}, embed_dim={self.embed_dim})"
 

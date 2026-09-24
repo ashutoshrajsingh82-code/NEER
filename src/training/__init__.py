@@ -18,6 +18,18 @@ from src.training.losses import (
     vertical_smoothness_loss,
 )
 
+from src.training.pretrain import (
+    DEFAULT_PRETRAIN_CHECKPOINT_PATH,
+    DEFAULT_PRETRAIN_HISTORY_PATH,
+    load_pretrained_encoder,
+    load_pretrained_into_neer_model,
+    load_training_history,
+    run_pretrain_epoch,
+    save_pretrained_encoder_checkpoint,
+    save_training_history,
+    train_pretrain,
+)
+
 __all__ = [
     "DEFAULT_DEPTH_DIM",
     "DEFAULT_EPS",
@@ -27,6 +39,15 @@ __all__ = [
     "gradient_loss",
     "masked_mse_loss",
     "vertical_smoothness_loss",
+    "DEFAULT_PRETRAIN_CHECKPOINT_PATH",
+    "DEFAULT_PRETRAIN_HISTORY_PATH",
+    "save_pretrained_encoder_checkpoint",
+    "load_pretrained_encoder",
+    "load_pretrained_into_neer_model",
+    "save_training_history",
+    "load_training_history",
+    "run_pretrain_epoch",
+    "train_pretrain",
 ]
 
 # `NEERLoss` itself is only defined when torch is installed (same lazy
