@@ -373,6 +373,41 @@ loader): importing `src/data/dataset.py` works without it installed;
 constructing `NEERDataset` without it raises `MissingDependencyError`
 naming `pip install torch`. See `tests/test_dataset.py`.
 
+## Optional graph refinement (Phase 22)
+
+`src/models/gnn.py` adds an *optional* graph neural network that refines
+the CNN's per-cell features before the ViT. Grid cells are the nodes;
+neighbouring cells (4-connected by default, 8 optionally) are the edges.
+
+```
+(batch, 11, lat, lon) -> CNNEncoder -> [GridGNN, if use_gnn] -> ViT -> decoder -> (batch, 15)
+```
+
+It is off by default — `model.use_gnn: false` in `configs/base.yaml` —
+and when off no GNN module is built at all, so the model, its
+parameters and its `state_dict` are exactly what they were without it.
+Turn it on in the config, or per run with `NEER_MODEL_USE_GNN=true`:
+
+```python
+from src.models import GNNConfig, NEERModel
+from src.utils.config import load_config
+
+model = NEERModel.from_config(load_config("demo"))        # follows model.use_gnn
+model = NEERModel(use_gnn=True)                           # or explicitly
+model = NEERModel(use_gnn=True, gnn_config=GNNConfig(num_layers=2, connectivity=8))
+```
+
+With `GNNConfig.use_current=True` (default) the model's own
+`u_current`/`v_current` input channels are projected onto every edge
+(flow along and across it) and fed into the message function, so the
+ocean current changes what each cell hears from each neighbour. With
+`use_current=False` the current is not read at all. The GNN adds about
+6.5k parameters to the default model, and pretrained CNN/ViT weights
+(`load_pretrained_encoder`) load unchanged either way. Not modelled: land
+masking (the input has no mask channel) and the east-west/north-south
+cell-size difference away from the equator. See `tests/test_gnn.py` and
+`tests/test_gnn_graph.py` (the latter needs no torch).
+
 ## Configuration
 
 Base configuration lives in `configs/base.yaml` and is loaded via

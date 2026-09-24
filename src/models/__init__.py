@@ -50,6 +50,14 @@ embedding at the whole-model level; `predict_profile` adds a supplied
 climatology baseline (Phase 11, `src.data.preprocessing.climatology`)
 to reconstruct an absolute temperature profile. No new learnable
 weights of its own, and no training — see the module docstring.
+
+Phase 22 adds an optional graph refinement (`src/models/gnn.py`):
+`GridGNN` treats every grid cell as a node and every pair of neighbouring
+cells as edges, and refines the CNN's per-cell feature map before the
+ViT. It is switched by `model.use_gnn` (default `false`) via
+`NEERModel(use_gnn=...)` / `NEERModel.from_config(config)`; when off, no
+GNN module exists. With `GNNConfig.use_current` the `u_current` /
+`v_current` input channels condition the messages themselves.
 """
 
 from src.data.preprocessing.channels import (
@@ -77,6 +85,15 @@ from src.models.encoder import (
     VALID_NORMS,
     CNNEncoder,
     CNNEncoderConfig,
+)
+from src.models.gnn import (
+    DEFAULT_CURRENT_CHANNELS,
+    VALID_CONNECTIVITIES,
+    GNNConfig,
+    GridGNN,
+    GridGraph,
+    build_grid_edges,
+    build_grid_graph,
 )
 from src.models.neer_model import NEERModel
 from src.models.pretrain_decoder import (
@@ -129,6 +146,13 @@ __all__ = [
     "DEFAULT_DECODER_MLP_RATIO",
     "DEFAULT_DECODER_DROPOUT",
     "NEERModel",
+    "GNNConfig",
+    "GridGNN",
+    "GridGraph",
+    "build_grid_edges",
+    "build_grid_graph",
+    "VALID_CONNECTIVITIES",
+    "DEFAULT_CURRENT_CHANNELS",
     "PretrainEncoder",
     "PretrainEncoderConfig",
     "ReconstructionDecoder",

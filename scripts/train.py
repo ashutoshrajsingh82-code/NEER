@@ -380,7 +380,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         num_workers=args.num_workers,
     )
 
-    model = NEERModel().to(device)
+    # Built from the config so `model.use_gnn` (or NEER_MODEL_USE_GNN=true)
+    # actually reaches the model. With the shipped configs this is
+    # identical to a plain `NEERModel()`.
+    model = NEERModel.from_config(config).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     logger.info("Model: %s (%d parameters)", repr(model), n_params)
 

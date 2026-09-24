@@ -23,6 +23,16 @@ physical-units temperature by adding it to a climatological baseline
 data this tensor-only model never sees — lat/lon/time metadata, not
 surface-field channels).
 
+Optional GNN (Phase 22)
+-----------------------
+With `use_gnn=True` (config: `model.use_gnn`, default `false`) the
+encoder refines the CNN's per-cell feature map with a grid-graph GNN
+(`src/models/gnn.py`) before the ViT: `CNN -> GridGNN -> ViT`. With it
+off, no GNN module is built and this model is exactly the Phase 18 one.
+`NEERModel.from_config(config)` is how `model.use_gnn` reaches the model.
+The decoder, `get_embedding` and `predict_profile` contracts are the
+same either way.
+
 Do not train yet
 ------------------
 This phase is architecture wiring and a forward-pass smoke test only.
@@ -35,12 +45,17 @@ full, untrained, CPU-only pipeline check this phase asks for.
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from src.data.loaders.errors import MissingDependencyError
 from src.models.depth_decoder import DepthDecoderConfig
+from src.models.depth_embedding import DepthEmbeddingConfig
 from src.models.encoder import CNNEncoderConfig
+from src.models.gnn import GNNConfig
 from src.models.vit import ViTConfig
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from src.utils.config import NeerConfig
 
 try:  # pragma: no cover - environment dependent
     import torch
@@ -76,6 +91,13 @@ if _TORCH_AVAILABLE:
         `CNNViTEncoder` deriving `ViTConfig` from the CNN's output
         width).
 
+        `use_gnn=True` inserts the optional Phase 22 grid GNN between the
+        CNN and the ViT, configured by `gnn_config` (a default
+        `GNNConfig` matching the CNN's output width if omitted).
+        `gnn_config` without `use_gnn=True` raises rather than being
+        silently ignored. `use_gnn=False` (the default) builds no GNN at
+        all. To build from `configs/*.yaml`, use `NEERModel.from_config`.
+
         Examples
         --------
         >>> model = NEERModel().eval()
@@ -94,6 +116,8 @@ if _TORCH_AVAILABLE:
             cnn_config: Optional[CNNEncoderConfig] = None,
             vit_config: Optional[ViTConfig] = None,
             decoder_config: Optional[DepthDecoderConfig] = None,
+            use_gnn: bool = False,
+            gnn_config: Optional[GNNConfig] = None,
         ) -> None:
             _require_torch()
             super().__init__()
@@ -103,7 +127,18 @@ if _TORCH_AVAILABLE:
             from src.models.depth_decoder import DepthDecoder
             from src.models.vit import CNNViTEncoder
 
-            self.encoder = CNNViTEncoder(cnn_config, vit_config)
+            if gnn_config is not None and not use_gnn:
+                raise ValueError(
+                    "gnn_config was given but use_gnn is False, so it would be silently ignored; "
+                    "pass use_gnn=True to enable the GNN (or drop gnn_config)"
+                )
+            resolved_gnn_config = None
+            if use_gnn:
+                resolved_gnn_config = gnn_config or GNNConfig(
+                    in_channels=(cnn_config or CNNEncoderConfig()).out_channels
+                )
+
+            self.encoder = CNNViTEncoder(cnn_config, vit_config, resolved_gnn_config)
             embed_dim = self.encoder.embed_dim
 
             if decoder_config is None:
@@ -114,6 +149,60 @@ if _TORCH_AVAILABLE:
                     f"the encoder's embed_dim ({embed_dim})"
                 )
             self.decoder = DepthDecoder(decoder_config)
+
+        @classmethod
+        def from_config(
+            cls,
+            config: "NeerConfig",
+            *,
+            cnn_config: Optional[CNNEncoderConfig] = None,
+            vit_config: Optional[ViTConfig] = None,
+            decoder_config: Optional[DepthDecoderConfig] = None,
+            gnn_config: Optional[GNNConfig] = None,
+        ) -> "NEERModel":
+            """Build a model from a resolved `NeerConfig` (`load_config(...)`).
+
+            Reads `model.embedding_dim`, `model.use_gnn` and `depths` from
+            the config — the single source of truth for them — and leaves
+            every other hyperparameter at its default unless overridden.
+            With the shipped configs (`embedding_dim: 256`,
+            `use_gnn: false`, the 15 standard depths) the result is
+            identical to `NEERModel()`.
+
+            Parameters
+            ----------
+            config:
+                Resolved configuration; `config.model.use_gnn` decides
+                whether the Phase 22 GNN is built.
+            cnn_config, vit_config, decoder_config:
+                Optional overrides. When `vit_config` / `decoder_config`
+                are omitted they are derived from `config` and the CNN.
+            gnn_config:
+                Optional GNN hyperparameters; only valid when
+                `config.model.use_gnn` is true (otherwise `NEERModel`
+                raises, as for a direct `gnn_config` without `use_gnn`).
+            """
+            embed_dim = config.model.embedding_dim
+            cnn_config = cnn_config or CNNEncoderConfig()
+            vit_config = vit_config or ViTConfig(in_channels=cnn_config.out_channels, embed_dim=embed_dim)
+            decoder_config = decoder_config or DepthDecoderConfig(
+                embed_dim=vit_config.embed_dim,
+                depth_config=DepthEmbeddingConfig(
+                    depths=tuple(config.depths), embed_dim=vit_config.embed_dim
+                ),
+            )
+            return cls(
+                cnn_config,
+                vit_config,
+                decoder_config,
+                use_gnn=config.model.use_gnn,
+                gnn_config=gnn_config,
+            )
+
+        @property
+        def use_gnn(self) -> bool:
+            """Whether the optional Phase 22 GNN refinement is enabled."""
+            return self.encoder.uses_gnn
 
         @property
         def in_channels(self) -> int:
@@ -230,7 +319,7 @@ if _TORCH_AVAILABLE:
         def __repr__(self) -> str:  # pragma: no cover - cosmetic
             return (
                 f"NEERModel(in_channels={self.in_channels}, embed_dim={self.embed_dim}, "
-                f"num_depths={self.num_depths})"
+                f"num_depths={self.num_depths}, use_gnn={self.use_gnn})"
             )
 
 else:  # pragma: no cover - exercised only in a torch-less environment

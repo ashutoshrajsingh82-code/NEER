@@ -44,6 +44,11 @@ CLS token to fake this with; `get_embedding` literally is
 depth decoder would be built on top of, and it moves with the model's
 weights.
 
+Phase 22 lets `CNNViTEncoder` optionally refine the CNN's per-cell
+feature map with a grid-graph GNN (`src/models/gnn.py`) before the ViT
+sees it. It is off unless a `GNNConfig` is passed; when off, no GNN
+module exists and the encoder is byte-for-byte the Phase 14/15 one.
+
 torch is optional
 ------------------
 Same lazy pattern as `encoder.py` / `src/data/dataset.py`: importing this
@@ -58,6 +63,7 @@ from typing import Sequence, Tuple, Union
 
 from src.data.loaders.errors import MissingDependencyError
 from src.models.encoder import DEFAULT_CHANNELS, CNNEncoderConfig
+from src.models.gnn import GNNConfig
 
 try:  # pragma: no cover - environment dependent
     import torch
@@ -413,18 +419,30 @@ if _TORCH_AVAILABLE:
 
         If `vit_config` is omitted it is derived so its `in_channels`
         matches the CNN's output width; if given, a mismatch raises.
+
+        **Optional GNN (Phase 22).** If `gnn_config` is given, a
+        `GridGNN` refines the CNN's `(batch, C_cnn, H, W)` feature map
+        between the CNN and the ViT: `CNN -> GridGNN -> ViT`. When it is
+        `None` (the default) no GNN module is created, so the parameters,
+        `state_dict` keys and forward computation are exactly those of
+        the plain `CNN -> ViT` encoder. If the GNN uses the ocean current
+        (`gnn_config.use_current`), the `u_current` / `v_current` channels
+        are read from this encoder's *input* `x` at
+        `gnn_config.current_channels`.
         """
 
         def __init__(
             self,
             cnn_config: CNNEncoderConfig | None = None,
             vit_config: ViTConfig | None = None,
+            gnn_config: GNNConfig | None = None,
         ) -> None:
             _require_torch()
             super().__init__()
             # Imported here so a torch-less environment still reaches
             # `_require_torch` above with the helpful error first.
             from src.models.encoder import CNNEncoder
+            from src.models.gnn import GridGNN
 
             self.cnn = CNNEncoder(cnn_config)
             cnn_out = self.cnn.out_channels
@@ -435,6 +453,25 @@ if _TORCH_AVAILABLE:
                     f"ViTConfig.in_channels ({vit_config.in_channels}) must equal the CNN encoder's "
                     f"out_channels ({cnn_out})"
                 )
+
+            self.gnn = None
+            if gnn_config is not None:
+                if gnn_config.in_channels != cnn_out:
+                    raise ValueError(
+                        f"GNNConfig.in_channels ({gnn_config.in_channels}) must equal the CNN encoder's "
+                        f"out_channels ({cnn_out})"
+                    )
+                if gnn_config.use_current:
+                    out_of_range = [c for c in gnn_config.current_channels if c >= self.cnn.in_channels]
+                    if out_of_range:
+                        raise ValueError(
+                            f"GNNConfig.current_channels {gnn_config.current_channels} must index "
+                            f"the model input's {self.cnn.in_channels} channels, but {out_of_range} "
+                            f"is out of range (set use_current=False, or point current_channels at "
+                            f"the u/v current channels of this input layout)"
+                        )
+                self.gnn = GridGNN(gnn_config)
+
             self.vit = VisionTransformer(vit_config)
 
         @property
@@ -445,14 +482,31 @@ if _TORCH_AVAILABLE:
         def embed_dim(self) -> int:
             return self.vit.embed_dim
 
+        @property
+        def uses_gnn(self) -> bool:
+            """Whether the optional Phase 22 GNN refinement is part of this encoder."""
+            return self.gnn is not None
+
         def grid_shape(self, height: int, width: int) -> Tuple[int, int]:
             return self.vit.grid_shape(height, width)
 
         def tokens_to_map(self, tokens: "torch.Tensor", height: int, width: int) -> "torch.Tensor":
             return self.vit.tokens_to_map(tokens, height, width)
 
+        def _spatial_features(self, x: "torch.Tensor") -> "torch.Tensor":
+            """The `(batch, C_cnn, H, W)` map the ViT consumes: the CNN's
+            output, refined by the GNN when one is enabled."""
+            features = self.cnn(x)
+            if self.gnn is None:
+                return features
+            current = None
+            if self.gnn.uses_current:
+                u_idx, v_idx = self.gnn.config.current_channels
+                current = x[:, [u_idx, v_idx]]  # (B, 2, H, W) straight from the model input
+            return self.gnn(features, current)
+
         def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-            return self.vit(self.cnn(x))
+            return self.vit(self._spatial_features(x))
 
         def get_embedding(self, x: "torch.Tensor") -> "torch.Tensor":
             """Pooled `(batch, embed_dim)` embedding for the full
@@ -463,7 +517,7 @@ if _TORCH_AVAILABLE:
             search, an explainability tool) should call to get "the
             embedding" for a sample. It delegates to
             `VisionTransformer.get_embedding` on this model's own CNN
-            feature map, so it is exactly the mean of this same model's
+            feature map (GNN-refined when one is enabled), so it is exactly the mean of this same model's
             `forward()` token output (`get_embedding(x) ==
             forward(x).mean(dim=1)`), never a separate or synthetic
             computation, and it carries gradients back through the CNN
@@ -480,7 +534,7 @@ if _TORCH_AVAILABLE:
             `(batch, config.embed_dim)` — `(batch, 256)` under every
             default config (`configs/base.yaml`'s `model.embedding_dim`).
             """
-            return self.vit.get_embedding(self.cnn(x))
+            return self.vit.get_embedding(self._spatial_features(x))
 
 else:  # pragma: no cover - exercised only in a torch-less environment
 
