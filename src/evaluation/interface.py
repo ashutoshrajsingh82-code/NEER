@@ -107,6 +107,12 @@ class PooledSplit:
         through for reporting/auditing.
     channel_names, depth_names:
         Column labels for `features` and `profile`/`profile_mask`.
+    variable_names:
+        One entry per `profile`/`depth_names` column, naming which
+        `TensorBundle.target_names` variable that column came from
+        (Phase 25's per-variable metrics; see
+        `src.evaluation.metrics.compute_profile_metrics`). Empty when
+        the bundle recorded no target names.
     split:
         Which of `SPLIT_NAMES` this is.
     source_tensors_path:
@@ -125,6 +131,7 @@ class PooledSplit:
     depth_names: List[str]
     split: str
     source_tensors_path: Optional[str] = None
+    variable_names: List[str] = field(default_factory=list)
 
     @property
     def n_samples(self) -> int:
@@ -133,6 +140,58 @@ class PooledSplit:
     @property
     def n_depth(self) -> int:
         return int(self.profile.shape[1])
+
+
+def _depth_names_for_columns(depth: Optional[np.ndarray], n_depth_total: int) -> List[str]:
+    """Depth labels (e.g. `"0m"`) for every profile column, `n_depth_total`
+    of them.
+
+    For a single-variable bundle, `depth` already has one entry per
+    column and is used as-is. For a multi-variable bundle,
+    `TensorAssembler.assemble` concatenates each variable's own depth
+    axis in turn (see `_variable_names_for_depths`), so the *same*
+    `depth` levels repeat once per variable; this tiles `depth`'s labels
+    to match, so column `c`'s depth label lines up with column `c`'s
+    entry in `_variable_names_for_depths`'s output. Falls back to a
+    plain column index when there is no `depth` axis, or when
+    `n_depth_total` isn't an exact multiple of `len(depth)` (a bundle
+    this module's own assembler wouldn't produce).
+    """
+    if depth is None:
+        return [str(i) for i in range(n_depth_total)]
+    base = [f"{int(d)}m" for d in np.asarray(depth)]
+    if len(base) == n_depth_total:
+        return base
+    if len(base) > 0 and n_depth_total % len(base) == 0:
+        repeats = n_depth_total // len(base)
+        return base * repeats
+    return [str(i) for i in range(n_depth_total)]
+
+
+def _variable_names_for_depths(
+    target_names: Sequence[str], n_depth_total: int
+) -> List[str]:
+    """Expand `TensorBundle.target_names` to one label per profile column.
+
+    `TensorAssembler.assemble` (`src/data/preprocessing/tensors.py`)
+    builds a multi-variable target by concatenating each variable's own
+    `(time, depth, lat, lon)` stack along the depth axis, in
+    `target_names` order — variable 0's depths first, then variable 1's,
+    and so on. This mirrors that layout so column `c` here names the
+    same variable `pool_tensor_bundle` pooled column `c` from. Returns
+    `[]` (no labels) when there are no target names or the column count
+    is not an exact multiple of the variable count — the latter should
+    not happen for a bundle `TensorAssembler` produced, but a hand-built
+    or foreign bundle should get an empty (rather than a wrong) label
+    list.
+    """
+    names = list(target_names)
+    if not names or n_depth_total == 0:
+        return []
+    if n_depth_total % len(names) != 0:
+        return []
+    per_variable = n_depth_total // len(names)
+    return [name for name in names for _ in range(per_variable)]
 
 
 def pool_tensor_bundle(
@@ -154,13 +213,11 @@ def pool_tensor_bundle(
             f"tensor bundle has no split(s) {missing}; available: {sorted(bundle.split_masks)}"
         )
 
-    depth_names = (
-        [f"{int(d)}m" for d in np.asarray(bundle.depth)]
-        if bundle.depth is not None
-        else [str(i) for i in range(bundle.targets.shape[1])]
-    )
+    n_depth_total = bundle.targets.shape[1]
+    depth_names = _depth_names_for_columns(bundle.depth, n_depth_total)
     months_all = month_of(bundle.time)
     path_str = None if source_tensors_path is None else str(source_tensors_path)
+    variable_names = _variable_names_for_depths(bundle.target_names, len(depth_names))
 
     pooled: Dict[str, PooledSplit] = {}
     for name in splits:
@@ -183,6 +240,7 @@ def pool_tensor_bundle(
             depth_names=depth_names,
             split=name,
             source_tensors_path=path_str,
+            variable_names=variable_names,
         )
     return pooled
 
@@ -276,7 +334,11 @@ def evaluate_baseline(
                 f"expected {split.profile.shape} (split='{split_name}')"
             )
         metrics[split_name] = compute_profile_metrics(
-            split.profile, prediction, split.profile_mask, depth_names=split.depth_names
+            split.profile,
+            prediction,
+            split.profile_mask,
+            depth_names=split.depth_names,
+            variable_names=split.variable_names or None,
         )
         counts[split_name] = split.n_samples
 
