@@ -54,6 +54,22 @@ model:
   # NEER_MODEL_USE_GNN=true.
   use_gnn: false
 
+uncertainty:
+  # Optional heteroscedastic regression (src/models/depth_decoder.py,
+  # Phase 23). When true, DepthDecoder grows a second output head that
+  # predicts a per-depth log-variance alongside the mean anomaly, and
+  # models can be trained with the Gaussian NLL loss
+  # (src.training.losses.gaussian_nll_loss) instead of plain MSE.
+  # false = no log-variance head is built at all (the plain Phase 17/18
+  # decoder). Built via NEERModel.from_config(); override per run with
+  # NEER_UNCERTAINTY_ENABLED=true.
+  #
+  # This flag only controls whether a variance is predicted. It is not a
+  # claim that the predicted variance is calibrated — no calibration
+  # testing (e.g. checking that ~68% of targets fall within one sigma)
+  # is implemented anywhere in this codebase yet.
+  enabled: false
+
 demo:
   enabled: true
   seed: 42

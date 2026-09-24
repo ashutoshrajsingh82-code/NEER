@@ -50,6 +50,21 @@ Same lazy pattern as `encoder.py` / `vit.py` / `depth_embedding.py`:
 importing this module and building a `DepthDecoderConfig` never needs
 torch; only instantiating a `DepthDecoder` raises
 `MissingDependencyError` when it is absent.
+
+Optional uncertainty (Phase 23)
+--------------------------------
+With `DepthDecoderConfig(uncertainty_enabled=True)` (config:
+`uncertainty.enabled` in `configs/base.yaml`, default `false`) the
+decoder additionally builds a `log_var_head`, a second
+`Linear(embed_dim, 1)` reading the same shared trunk as the mean
+`head`. `forward_with_uncertainty` then returns `(mean, log_variance)`
+instead of just `mean`; the standard deviation is
+`sigma = log_variance_to_sigma(log_variance) = exp(0.5 * log_variance)`.
+Train against it with `src.training.losses.gaussian_nll_loss`. `forward`
+itself is completely unchanged by this flag — it always returns the
+mean only — so nothing about the disabled (default) path changes.
+Note: enabling this predicts *a* variance; it does not make that
+variance calibrated. No calibration testing is implemented here.
 """
 
 from __future__ import annotations
@@ -117,6 +132,19 @@ class DepthDecoderConfig:
         `DepthEmbeddingConfig(embed_dim=embed_dim)` — the 15 NEER
         target depths (`DEFAULT_DEPTHS`) at this decoder's width.
         Its `embed_dim` must equal this config's `embed_dim`.
+    uncertainty_enabled:
+        Phase 23 — when `True`, the decoder builds a second shared
+        output head (`log_var_head`, same `Linear(embed_dim, 1)` shape
+        as the mean `head`) that predicts a per-depth log-variance
+        alongside the mean anomaly, reachable via
+        `DepthDecoder.forward_with_uncertainty`. `forward` itself is
+        unchanged either way — it always returns only the mean
+        anomalies, so existing callers see no behavior change.
+        Default `False` (config: `uncertainty.enabled` in
+        `configs/base.yaml`, wired in by `NEERModel.from_config`); no
+        log-variance head is built at all when disabled, so a
+        disabled decoder's parameters and state_dict keys are
+        identical to before this phase.
     """
 
     embed_dim: int = DEFAULT_DEPTH_EMBED_DIM
@@ -124,6 +152,7 @@ class DepthDecoderConfig:
     mlp_ratio: float = DEFAULT_DECODER_MLP_RATIO
     dropout: float = DEFAULT_DECODER_DROPOUT
     depth_config: Optional[DepthEmbeddingConfig] = None
+    uncertainty_enabled: bool = False
 
     def __post_init__(self) -> None:
         if self.embed_dim <= 0:
@@ -163,6 +192,28 @@ class DepthDecoderConfig:
 
 
 if _TORCH_AVAILABLE:
+
+    def log_variance_to_sigma(log_variance: "torch.Tensor") -> "torch.Tensor":
+        """`sigma = exp(0.5 * log_variance)`, the predicted standard deviation.
+
+        The one place this conversion happens, so every caller (this
+        module, `NEERModel.predict_uncertainty`, a training/eval
+        script) uses the same formula. Calling this on a log-variance
+        that came from a decoder built with `uncertainty_enabled=False`
+        is a caller error — such a decoder never produces a
+        log-variance tensor in the first place, so there's nothing to
+        guard here.
+
+        Parameters
+        ----------
+        log_variance:
+            Any shape; elementwise.
+
+        Returns
+        -------
+        A tensor of the same shape, sigma (standard deviation) > 0.
+        """
+        return torch.exp(0.5 * log_variance)
 
     class _SharedCrossAttention(nn.Module):
         """One multi-head cross-attention, shared across every depth query.
@@ -231,6 +282,11 @@ if _TORCH_AVAILABLE:
             )
             self.dropout = nn.Dropout(self.config.dropout)
             self.head = nn.Linear(d, 1)
+            # Phase 23 — optional second head, same shape as `head`, only
+            # built when uncertainty is enabled. Reads the same shared
+            # trunk output as `head` (see `_decode_hidden`); it does not
+            # duplicate the attention/MLP block, only the final readout.
+            self.log_var_head = nn.Linear(d, 1) if self.config.uncertainty_enabled else None
 
         @property
         def depths(self):
@@ -245,18 +301,59 @@ if _TORCH_AVAILABLE:
         def embed_dim(self) -> int:
             return self.config.embed_dim
 
-        def _decode(self, queries: "torch.Tensor", context: "torch.Tensor") -> "torch.Tensor":
-            """Shared attn -> feedforward -> readout, given explicit queries.
+        @property
+        def uncertainty_enabled(self) -> bool:
+            """Whether this decoder was built with a log-variance head (Phase 23)."""
+            return self.config.uncertainty_enabled
 
-            Internal: `forward` builds `queries` from the full depth
-            table; tests use this directly with a subset of rows to
-            check that per-depth outputs don't depend on which other
-            depths are present in the same batch of queries.
+        def _decode_hidden(self, queries: "torch.Tensor", context: "torch.Tensor") -> "torch.Tensor":
+            """Shared attn -> feedforward, given explicit queries. `(B, n_queries, embed_dim)`.
+
+            The common trunk both `_decode` (mean only) and
+            `_decode_with_uncertainty` (mean + log-variance) read from,
+            so the two output heads see exactly the same representation
+            and neither duplicates the attention/MLP computation.
             """
             attended = self.attn(queries, context)
             x = self.norm1(queries + self.dropout(attended))
             x = self.norm2(x + self.dropout(self.mlp(x)))
+            return x
+
+        def _decode(self, queries: "torch.Tensor", context: "torch.Tensor") -> "torch.Tensor":
+            """Shared attn -> feedforward -> mean readout, given explicit queries.
+
+            Internal: `forward` builds `queries` from the full depth
+            table; tests use this directly with a subset of rows to
+            check that per-depth outputs don't depend on which other
+            depths are present in the same batch of queries. Unchanged
+            by Phase 23 — always returns only the mean, never the
+            log-variance, regardless of `uncertainty_enabled`.
+            """
+            x = self._decode_hidden(queries, context)
             return self.head(x).squeeze(-1)  # (B, n_queries)
+
+        def _decode_with_uncertainty(
+            self, queries: "torch.Tensor", context: "torch.Tensor"
+        ) -> "tuple[torch.Tensor, torch.Tensor]":
+            """Shared attn -> feedforward -> mean AND log-variance readout.
+
+            Internal counterpart to `_decode`; only called once
+            `forward_with_uncertainty` has already checked
+            `uncertainty_enabled`, so `self.log_var_head` is guaranteed
+            to exist here.
+            """
+            x = self._decode_hidden(queries, context)
+            mean = self.head(x).squeeze(-1)  # (B, n_queries)
+            log_variance = self.log_var_head(x).squeeze(-1)  # (B, n_queries)
+            return mean, log_variance
+
+        def _validate_embedding(self, embedding: "torch.Tensor") -> None:
+            if embedding.dim() != 2:
+                raise ValueError(f"expected a 2D (batch, embed_dim) embedding, got shape {tuple(embedding.shape)}")
+            if embedding.shape[-1] != self.config.embed_dim:
+                raise ValueError(
+                    f"embedding has {embedding.shape[-1]} features, expected {self.config.embed_dim}"
+                )
 
         def forward(self, embedding: "torch.Tensor") -> "torch.Tensor":
             """
@@ -269,24 +366,68 @@ if _TORCH_AVAILABLE:
             Returns
             -------
             `(batch, num_depths)` anomalies, one per `self.depths`, in
-            that exact order.
+            that exact order. Always just the mean anomaly — identical
+            whether or not `uncertainty_enabled` is set; use
+            `forward_with_uncertainty` to also get the log-variance.
             """
-            if embedding.dim() != 2:
-                raise ValueError(f"expected a 2D (batch, embed_dim) embedding, got shape {tuple(embedding.shape)}")
-            if embedding.shape[-1] != self.config.embed_dim:
-                raise ValueError(
-                    f"embedding has {embedding.shape[-1]} features, expected {self.config.embed_dim}"
-                )
+            self._validate_embedding(embedding)
 
             batch = embedding.shape[0]
             queries = self.depth_embedding.all_embeddings().unsqueeze(0).expand(batch, -1, -1)
             context = embedding.unsqueeze(1)  # (B, 1, embed_dim)
             return self._decode(queries, context)
 
+        def forward_with_uncertainty(
+            self, embedding: "torch.Tensor"
+        ) -> "tuple[torch.Tensor, torch.Tensor]":
+            """Phase 23 — mean anomaly AND log-variance, both `(batch, num_depths)`.
+
+            Only available when this decoder was built with
+            `DepthDecoderConfig(uncertainty_enabled=True)`; the feature
+            is only exposed when explicitly enabled, per the module
+            docstring's default-off contract.
+
+            Parameters
+            ----------
+            embedding:
+                `(batch, embed_dim)` spatial embedding, same contract
+                as `forward`.
+
+            Returns
+            -------
+            `(mean, log_variance)`, each `(batch, num_depths)`, one
+            column per `self.depths` in that exact order. Get the
+            predicted standard deviation with
+            `log_variance_to_sigma(log_variance)` — this method
+            deliberately does not do that conversion itself, so a
+            caller that wants the loss-friendly log-variance (Gaussian
+            NLL is more numerically stable in log space) isn't forced
+            through an extra `log(exp(...))` round trip.
+
+            Raises
+            ------
+            RuntimeError:
+                If `uncertainty_enabled` is `False` for this decoder.
+            """
+            if not self.uncertainty_enabled:
+                raise RuntimeError(
+                    "forward_with_uncertainty() requires a DepthDecoder built with "
+                    "DepthDecoderConfig(uncertainty_enabled=True) (config: uncertainty.enabled "
+                    "in configs/base.yaml); this decoder was built with uncertainty disabled, "
+                    "so it has no log-variance head to read from. Use forward() for the plain "
+                    "mean-only prediction instead."
+                )
+            self._validate_embedding(embedding)
+
+            batch = embedding.shape[0]
+            queries = self.depth_embedding.all_embeddings().unsqueeze(0).expand(batch, -1, -1)
+            context = embedding.unsqueeze(1)  # (B, 1, embed_dim)
+            return self._decode_with_uncertainty(queries, context)
+
         def __repr__(self) -> str:  # pragma: no cover - cosmetic
             return (
                 f"DepthDecoder(embed_dim={self.embed_dim}, num_depths={self.num_depths}, "
-                f"num_heads={self.config.num_heads})"
+                f"num_heads={self.config.num_heads}, uncertainty_enabled={self.uncertainty_enabled})"
             )
 
 else:  # pragma: no cover - exercised only in a torch-less environment

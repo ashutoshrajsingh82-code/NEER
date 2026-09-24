@@ -82,6 +82,20 @@ class DemoConfig:
 
 
 @dataclass(frozen=True)
+class UncertaintyConfig:
+    """Phase 23 — optional heteroscedastic-regression toggle.
+
+    `enabled=True` is the only thing this flag asserts: that
+    `NEERModel`/`DepthDecoder` build a second output head predicting a
+    per-depth log-variance alongside the mean anomaly. It is not a claim
+    that the predicted variance is calibrated (see
+    `src/models/depth_decoder.py`).
+    """
+
+    enabled: bool
+
+
+@dataclass(frozen=True)
 class NeerConfig:
     """Fully resolved, validated NEER configuration for one environment."""
 
@@ -91,6 +105,7 @@ class NeerConfig:
     depths: List[float]
     model: ModelConfig
     demo: DemoConfig
+    uncertainty: UncertaintyConfig
     raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
 
@@ -136,6 +151,7 @@ def _apply_env_var_overrides(data: Dict[str, Any]) -> Dict[str, Any]:
       NEER_DEMO_SEED             -> demo.seed       (int)
       NEER_MODEL_EMBEDDING_DIM   -> model.embedding_dim (int)
       NEER_MODEL_USE_GNN         -> model.use_gnn   ("true"/"false")
+      NEER_UNCERTAINTY_ENABLED   -> uncertainty.enabled ("true"/"false")
       NEER_BACKEND_PORT          -> backend.port    (int)
       NEER_FRONTEND_PORT         -> frontend.port   (int)
     """
@@ -162,6 +178,11 @@ def _apply_env_var_overrides(data: Dict[str, Any]) -> Dict[str, Any]:
         if "NEER_MODEL_USE_GNN" in os.environ:
             model["use_gnn"] = _bool(os.environ["NEER_MODEL_USE_GNN"])
         data["model"] = model
+
+    if "NEER_UNCERTAINTY_ENABLED" in os.environ:
+        uncertainty = dict(data.get("uncertainty", {}))
+        uncertainty["enabled"] = _bool(os.environ["NEER_UNCERTAINTY_ENABLED"])
+        data["uncertainty"] = uncertainty
 
     if "NEER_BACKEND_PORT" in os.environ:
         backend = dict(data.get("backend", {}))
@@ -252,6 +273,13 @@ def validate_demo(demo: Dict[str, Any]) -> None:
         raise ConfigValidationError("demo.seed must be an integer")
 
 
+def validate_uncertainty(uncertainty: Dict[str, Any]) -> None:
+    if "enabled" not in uncertainty:
+        raise ConfigValidationError("uncertainty.enabled is required")
+    if not isinstance(uncertainty["enabled"], bool):
+        raise ConfigValidationError("uncertainty.enabled must be a boolean")
+
+
 def validate_config(data: Dict[str, Any]) -> None:
     """Validate a fully-merged configuration dict. Raises ConfigValidationError."""
     if "environment" not in data or not str(data["environment"]).strip():
@@ -262,6 +290,7 @@ def validate_config(data: Dict[str, Any]) -> None:
         ("domain", validate_domain),
         ("model", validate_model),
         ("demo", validate_demo),
+        ("uncertainty", validate_uncertainty),
     ):
         if section not in data or not isinstance(data[section], dict):
             raise ConfigValidationError(f"'{section}' section is required")
@@ -285,6 +314,7 @@ def _build_neer_config(data: Dict[str, Any]) -> NeerConfig:
         depths=list(data["depths"]),
         model=ModelConfig(**data["model"]),
         demo=DemoConfig(**data["demo"]),
+        uncertainty=UncertaintyConfig(**data["uncertainty"]),
         raw=data,
     )
 

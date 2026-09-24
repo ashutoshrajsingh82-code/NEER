@@ -33,6 +33,21 @@ off, no GNN module is built and this model is exactly the Phase 18 one.
 The decoder, `get_embedding` and `predict_profile` contracts are the
 same either way.
 
+Optional uncertainty (Phase 23)
+--------------------------------
+With `decoder_config.uncertainty_enabled=True` (config:
+`uncertainty.enabled`, default `false`) the decoder additionally
+predicts a per-depth log-variance alongside the mean anomaly. `forward`
+and `predict_profile` are unchanged either way — they always return
+just the mean/reconstructed profile. The extra output is only reachable
+through `forward_with_uncertainty` / `predict_uncertainty`, and only
+when the feature is enabled; both raise otherwise.
+`NEERModel.from_config(config)` is how `uncertainty.enabled` reaches
+the model. See `src/models/depth_decoder.py` for the head itself and
+`src/training/losses.gaussian_nll_loss` for training against it.
+Enabling this predicts *a* variance, not a *calibrated* one — no
+calibration testing is implemented anywhere in this codebase.
+
 Do not train yet
 ------------------
 This phase is architecture wiring and a forward-pass smoke test only.
@@ -162,21 +177,27 @@ if _TORCH_AVAILABLE:
         ) -> "NEERModel":
             """Build a model from a resolved `NeerConfig` (`load_config(...)`).
 
-            Reads `model.embedding_dim`, `model.use_gnn` and `depths` from
-            the config — the single source of truth for them — and leaves
-            every other hyperparameter at its default unless overridden.
-            With the shipped configs (`embedding_dim: 256`,
-            `use_gnn: false`, the 15 standard depths) the result is
-            identical to `NEERModel()`.
+            Reads `model.embedding_dim`, `model.use_gnn`,
+            `uncertainty.enabled` and `depths` from the config — the
+            single source of truth for them — and leaves every other
+            hyperparameter at its default unless overridden. With the
+            shipped configs (`embedding_dim: 256`, `use_gnn: false`,
+            `uncertainty.enabled: false`, the 15 standard depths) the
+            result is identical to `NEERModel()`.
 
             Parameters
             ----------
             config:
                 Resolved configuration; `config.model.use_gnn` decides
-                whether the Phase 22 GNN is built.
+                whether the Phase 22 GNN is built, and
+                `config.uncertainty.enabled` decides whether the
+                Phase 23 log-variance head is built.
             cnn_config, vit_config, decoder_config:
                 Optional overrides. When `vit_config` / `decoder_config`
                 are omitted they are derived from `config` and the CNN.
+                An explicit `decoder_config` is used as-is (including
+                its own `uncertainty_enabled`), so it is not overridden
+                by `config.uncertainty.enabled`.
             gnn_config:
                 Optional GNN hyperparameters; only valid when
                 `config.model.use_gnn` is true (otherwise `NEERModel`
@@ -190,6 +211,7 @@ if _TORCH_AVAILABLE:
                 depth_config=DepthEmbeddingConfig(
                     depths=tuple(config.depths), embed_dim=vit_config.embed_dim
                 ),
+                uncertainty_enabled=config.uncertainty.enabled,
             )
             return cls(
                 cnn_config,
@@ -220,6 +242,11 @@ if _TORCH_AVAILABLE:
         @property
         def num_depths(self) -> int:
             return self.decoder.num_depths
+
+        @property
+        def uncertainty_enabled(self) -> bool:
+            """Whether this model's decoder was built with a log-variance head (Phase 23)."""
+            return self.decoder.uncertainty_enabled
 
         def forward(self, x: "torch.Tensor") -> "torch.Tensor":
             """
@@ -252,6 +279,72 @@ if _TORCH_AVAILABLE:
             from, not a separate computation.
             """
             return self.encoder.get_embedding(x)
+
+        def forward_with_uncertainty(self, x: "torch.Tensor") -> "tuple[torch.Tensor, torch.Tensor]":
+            """Phase 23 — predicted anomalies AND their log-variance.
+
+            Only available when this model was built with
+            `uncertainty.enabled=True` (`decoder_config.uncertainty_enabled`
+            for a direct `NEERModel(...)` construction). The feature is
+            deliberately only exposed when explicitly enabled; `forward`
+            itself always returns the mean anomalies only, unaffected by
+            this flag.
+
+            Parameters
+            ----------
+            x:
+                `(batch, NEER_N_CHANNELS, H, W)` surface fields.
+
+            Returns
+            -------
+            `(mean, log_variance)`, each `(batch, num_depths)`, one
+            column per `self.depths`. Convert `log_variance` to a
+            standard deviation with
+            `src.models.depth_decoder.log_variance_to_sigma`, or use
+            `predict_uncertainty` below to get `sigma` directly.
+
+            Raises
+            ------
+            RuntimeError:
+                If `uncertainty_enabled` is `False` for this model.
+            """
+            embedding = self.encoder.get_embedding(x)
+            return self.decoder.forward_with_uncertainty(embedding)
+
+        def predict_uncertainty(self, x: "torch.Tensor") -> "tuple[torch.Tensor, torch.Tensor]":
+            """Phase 23 — predicted anomalies AND their standard deviation.
+
+            The `sigma`-flavored counterpart to `forward_with_uncertainty`:
+            same log-variance under the hood, converted with
+            `sigma = exp(0.5 * log_variance)`
+            (`src.models.depth_decoder.log_variance_to_sigma`) so callers
+            that want an uncertainty band (e.g. `mean +/- sigma`) don't
+            each reimplement the conversion. Only available when this
+            model was built with `uncertainty.enabled=True` — see
+            `forward_with_uncertainty`.
+
+            Parameters
+            ----------
+            x:
+                `(batch, NEER_N_CHANNELS, H, W)` surface fields.
+
+            Returns
+            -------
+            `(mean, sigma)`, each `(batch, num_depths)`. `sigma` is the
+            predicted standard deviation of the anomaly at each depth —
+            a measure of this model's own predicted spread, not a
+            calibrated confidence interval; no calibration testing is
+            implemented anywhere in this codebase.
+
+            Raises
+            ------
+            RuntimeError:
+                If `uncertainty_enabled` is `False` for this model.
+            """
+            from src.models.depth_decoder import log_variance_to_sigma
+
+            mean, log_variance = self.forward_with_uncertainty(x)
+            return mean, log_variance_to_sigma(log_variance)
 
         def predict_profile(
             self, x: "torch.Tensor", climatology: Union["torch.Tensor", "object"]
@@ -319,7 +412,8 @@ if _TORCH_AVAILABLE:
         def __repr__(self) -> str:  # pragma: no cover - cosmetic
             return (
                 f"NEERModel(in_channels={self.in_channels}, embed_dim={self.embed_dim}, "
-                f"num_depths={self.num_depths}, use_gnn={self.use_gnn})"
+                f"num_depths={self.num_depths}, use_gnn={self.use_gnn}, "
+                f"uncertainty_enabled={self.uncertainty_enabled})"
             )
 
 else:  # pragma: no cover - exercised only in a torch-less environment

@@ -34,6 +34,16 @@ cell is ocean, observed, and should contribute to the loss.
 Loss components
 ----------------
 * `masked_mse_loss` — the primary reconstruction loss. Always on.
+* `gaussian_nll_loss` — the loss for Phase 23's optional heteroscedastic
+  regression: given a predicted mean *and* log-variance (e.g.
+  `DepthDecoder.forward_with_uncertainty`, only available when
+  `uncertainty.enabled` is true), scores both together under a Gaussian
+  negative log-likelihood instead of `masked_mse_loss`. Not part of
+  `NEERLoss`'s weighted sum below — `NEERLoss` scores a single mean
+  prediction (`masked_mse_loss` and friends), while this loss needs the
+  extra log-variance tensor a mean-only model never produces. A training
+  script switches between the two based on `uncertainty.enabled`, it
+  doesn't combine them.
 * `vertical_smoothness_loss` — an optional regularizer on the
   *predicted* profile: penalizes large jumps between adjacent depth
   levels, encouraging a physically plausible (not jagged) profile.
@@ -383,6 +393,82 @@ def anomaly_loss(
         target_anomaly = target - target_mean
 
     return masked_mse_loss(pred_anomaly, target_anomaly, mask, eps=eps)
+
+
+# --------------------------------------------------------------------------
+# Optional uncertainty loss (Phase 23)
+# --------------------------------------------------------------------------
+
+
+def gaussian_nll_loss(
+    pred_mean: "torch.Tensor",
+    log_variance: "torch.Tensor",
+    target: "torch.Tensor",
+    mask: Optional["torch.Tensor"] = None,
+    eps: float = DEFAULT_EPS,
+) -> "torch.Tensor":
+    """Masked Gaussian negative log-likelihood, for heteroscedastic regression.
+
+    Trains a model that predicts both a mean and a log-variance per
+    cell (e.g. `DepthDecoder.forward_with_uncertainty`, only available
+    when built with `uncertainty_enabled=True` — see
+    `src/models/depth_decoder.py`) to make its predicted spread match
+    its actual error, rather than only minimizing the mean's squared
+    error the way `masked_mse_loss` does. Same masking convention and
+    axis-agnosticism as every other loss in this module: `mask` is
+    True/nonzero where a cell is valid and should contribute, and land
+    / gap-filled cells contribute to neither the numerator nor the
+    valid-cell count.
+
+    Per valid cell, the negative log-likelihood of `target` under
+    `Normal(pred_mean, sigma^2)` with `sigma = exp(0.5 * log_variance)`
+    (see `src.models.depth_decoder.log_variance_to_sigma`) is:
+
+        0.5 * (log_variance + (target - pred_mean)^2 / exp(log_variance))
+
+    which is the standard Gaussian NLL up to a `0.5 * log(2*pi)`
+    additive constant — the same "drop the model-independent constant"
+    convention `torch.nn.functional.gaussian_nll_loss(..., full=False)`
+    uses. Computed as `exp(-log_variance)` rather than
+    `1 / exp(log_variance)` for the same reason: exponentiating a
+    negative avoids the (rarer, but possible for a poorly-initialized
+    or diverging log-variance head) overflow of exponentiating a large
+    positive value in a denominator.
+
+    Parameters
+    ----------
+    pred_mean, target:
+        Any matching shape.
+    log_variance:
+        Same shape as `pred_mean`/`target`. Not `variance` or `sigma`
+        directly — training and predicting the *log* of the variance
+        is what keeps the variance itself always positive (via `exp`)
+        without needing a constrained/clamped output layer, and is
+        the more numerically stable quantity to run gradients through.
+    mask:
+        Same shape as `pred_mean`/`target`, True/nonzero where a cell
+        should contribute. `None` scores every cell (unmasked NLL).
+    eps:
+        Floor on the valid-cell count so an all-invalid `mask` (or an
+        empty tensor) returns `0.0` rather than `nan`, matching
+        `masked_mse_loss`.
+
+    Returns
+    -------
+    A 0-D tensor.
+    """
+    _require_torch()
+    _check_shapes_match(pred_mean, target)
+    if log_variance.shape != pred_mean.shape:
+        raise ValueError(
+            f"log_variance must have the same shape as pred_mean, got "
+            f"{tuple(log_variance.shape)} vs {tuple(pred_mean.shape)}"
+        )
+    precision = torch.exp(-log_variance)
+    nll = 0.5 * (log_variance + (target - pred_mean) ** 2 * precision)
+    mask_f = _mask_like(mask, nll)
+    denom = mask_f.sum().clamp_min(eps)
+    return (nll * mask_f).sum() / denom
 
 
 # --------------------------------------------------------------------------
