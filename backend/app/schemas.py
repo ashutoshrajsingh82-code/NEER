@@ -97,6 +97,47 @@ def embedding_query_params(
     return EmbeddingQueryParams(date=date)
 
 
+class MetricsQueryParams(BaseModel):
+    split: str = Field(
+        "test", description="Which data split to score: 'train', 'val' or 'test'."
+    )
+
+
+def metrics_query_params(
+    split: str = Query(
+        "test", description="Which data split to score: 'train', 'val' or 'test'."
+    ),
+) -> MetricsQueryParams:
+    # Whether `split` actually names one of the loaded bundle's splits is a
+    # semantic check (`src.evaluation.interface.SPLIT_NAMES`), not a `Query(...)`
+    # bound — left to `backend/app/services/evaluation.py::metrics`, same as
+    # `lat_min >= lat_max` is left to `NEERRepository` (see this module's
+    # docstring).
+    return MetricsQueryParams(split=split)
+
+
+class ArgoEvaluationQueryParams(BaseModel):
+    demo: bool = Field(
+        False,
+        description=(
+            "Explicit opt-in to a labelled DEMO_SYNTHETIC pipeline-check "
+            "instead of real ARGO validation. Never the default."
+        ),
+    )
+
+
+def argo_evaluation_query_params(
+    demo: bool = Query(
+        False,
+        description=(
+            "Explicit opt-in to a labelled DEMO_SYNTHETIC pipeline-check "
+            "instead of real ARGO validation. Never the default."
+        ),
+    ),
+) -> ArgoEvaluationQueryParams:
+    return ArgoEvaluationQueryParams(demo=demo)
+
+
 # --------------------------------------------------------------------------
 # Response schemas
 # --------------------------------------------------------------------------
@@ -198,3 +239,77 @@ class EmbeddingResponse(BaseModel):
     data_mode: str
     cache_hit: bool
     latency_ms: float
+
+
+# --------------------------------------------------------------------------
+# Phase 29B-1 — /metrics response schema
+#
+# Mirrors `src.evaluation.metrics.MetricSet.to_dict()` /
+# `ProfileMetrics.to_dict()` and `backend.app.services.evaluation.metrics()`'s
+# dict field-for-field — same convention as every other response schema in
+# this module (see the module docstring): nothing here invents a shape the
+# underlying evaluation layer doesn't already produce.
+# --------------------------------------------------------------------------
+
+
+class MetricSetSchema(BaseModel):
+    rmse: Optional[float] = None
+    mae: Optional[float] = None
+    bias: Optional[float] = None
+    pearson: Optional[float] = None
+    r2: Optional[float] = None
+    n: int
+
+
+class ProfileMetricsSchema(BaseModel):
+    overall: MetricSetSchema
+    per_depth: Dict[str, MetricSetSchema]
+    per_variable: Dict[str, MetricSetSchema] = Field(default_factory=dict)
+
+
+class MetricsResponse(BaseModel):
+    phase: int
+    split: str
+    n_samples: int
+    is_synthetic: bool
+    data_mode: str
+    disclaimer: Optional[str] = None
+    source_tensors_path: str
+    checkpoint: Optional[str] = None
+    metrics: ProfileMetricsSchema
+
+
+# --------------------------------------------------------------------------
+# Phase 29B-1 — /evaluation/argo response schema
+#
+# Mirrors `src.argo_validation.pipeline.run_argo_validation`'s `report` dict
+# (the same one `scripts/run_argo_validation.py` writes to
+# ``reports/argo_validation/*.json``) field-for-field. Real ARGO validation
+# populates `metrics`; a `demo=true` pipeline-check populates
+# `pipeline_check_metrics` instead and leaves `metrics` null — see
+# `src/argo_validation/pipeline.py`'s module docstring. `extra="allow"`
+# because that report is itself an open dict (its nested sections, e.g.
+# `counts`, are built dynamically, not from a fixed dataclass) — this
+# schema names every key `run_argo_validation` is documented to always
+# produce and otherwise doesn't narrow the shape.
+# --------------------------------------------------------------------------
+
+
+class ArgoEvaluationResponse(BaseModel):
+    phase: int
+    validation_type: str
+    observational_validation: bool
+    banner: Optional[str] = None
+    argo: Dict[str, Any]
+    neer_predictions: Dict[str, Any]
+    neer_grid: Dict[str, Any]
+    separation_note: str
+    config: Dict[str, Any]
+    counts: Dict[str, Any]
+    depth_coverage: Dict[str, Any]
+    metrics: Optional[Dict[str, Any]] = None
+    pipeline_check_metrics: Optional[Dict[str, Any]] = None
+    warnings: List[str]
+    limitations: List[str]
+
+    model_config = {"extra": "allow"}
