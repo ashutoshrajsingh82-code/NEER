@@ -86,3 +86,29 @@ class InferenceFailedError(NeerApiError):
 
     status_code = 500
     error_code = "inference_failed"
+
+
+class EvaluationFailedError(NeerApiError):
+    """Evaluation/scoring itself raised (not a missing input) — e.g. the
+    loaded checkpoint's output shape doesn't match the target it is being
+    scored against, or the ARGO validation pipeline raised while running.
+
+    Phase 29B-1 (`/metrics`, `/evaluation/argo`): distinct from
+    `InferenceFailedError`, which is a single reconstruction call failing,
+    not a multi-sample evaluation/validation run.
+    """
+
+    status_code = 500
+    error_code = "evaluation_failed"
+
+
+class ArgoDataUnavailableError(NeerApiError):
+    """No usable ARGO source data (CSV/NetCDF) was found for `/evaluation/argo`.
+
+    Phase 29B-1, Requirement 7/8: a real (non-demo) ARGO validation run
+    with nothing under the configured `data/raw` is a meaningful `503`,
+    never a fabricated or demo-substituted result.
+    """
+
+    status_code = 503
+    error_code = "argo_data_unavailable"

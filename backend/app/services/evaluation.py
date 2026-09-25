@@ -1,389 +1,344 @@
 """
-Shared fixtures for the backend API tests (`tests/test_backend_*.py`).
+Phase 29B-1 — evaluation service layer: `GET /metrics` and `GET /evaluation/argo`.
 
-Every fixture here builds *real* NEER artifacts — a genuine `NEERModel`
-(constructed the same way `InferenceService.from_checkpoint` builds one,
-via `NEERModel.from_config`), a genuine `TensorBundle` written to and
-read back from `.npz`, and a genuine checkpoint file in exactly the
-shape `scripts/train.py` writes — just small ones (a 16x16 grid, 15
-model depths, `NEER_N_CHANNELS` input channels) so the test suite runs
-in seconds on a laptop CPU. Nothing here is mocked or monkeypatched:
-`/reconstruct`, `/profile`, `/embedding`, `/metrics`, `/evaluation/argo`
-etc. run an actual forward pass through an actual `NEERModel` (and, for
-`/evaluation/argo`, an actual Phase 26 pipeline run) against these
-fixtures, the same code path production traffic uses.
+Glue only, same idiom as `backend/app/services/repository.py`: every
+number in here is produced by an existing NEER module —
+`src.evaluation` (Phase 24/25, reanalysis/test-target metrics) or
+`src.argo_validation` (Phase 26, independent ARGO validation) — never
+recomputed or approximated here. This module's job is to turn
+`NEERRepository`'s already-loaded bundle/model into the *inputs* those
+modules expect, call them, and turn a failure mode (no targets, no
+checkpoint, no ARGO data, a scoring/pipeline exception) into the right
+`NeerApiError` subclass. Routes (`backend/app/routers/metrics.py`,
+`backend/app/routers/evaluation.py`) call exactly one function each
+here and reshape the returned dict into the declared response model —
+no NEER logic lives in the routes (Requirement 10/11/12).
 
-Each test module imports the fixtures it needs by name, e.g.::
+`/metrics` — Phase 24/25 reanalysis/test-target evaluation
+-------------------------------------------------------------
+Runs the repository's already-loaded checkpoint (`NEERRepository.require_service`)
+over one split's real input grid, the same way `scripts/run_evaluation.py::
+evaluate_neer_checkpoint` scores NEER — reusing the loaded model instead of
+reloading the checkpoint file a second time — and scores the
+`(n_samples, n_depth)` output against that split's real, held-out
+`TensorBundle.targets` via `src.evaluation.interface.pool_tensor_bundle`
+and `src.evaluation.metrics.compute_profile_metrics`. A dataset with no
+targets, no checkpoint, or an empty split is a real `503`/`400` — never a
+fabricated number.
 
-    from tests._backend_fixtures import client, empty_client
-
-which is the standard pytest pattern for sharing fixtures defined
-outside `conftest.py` (this file is deliberately *not* named
-`conftest.py` so importing it — and therefore requiring `torch`/
-`fastapi` — is opt-in per test module, exactly like `torch =
-pytest.importorskip("torch")` elsewhere in this suite).
-
-Phase 29B-1 addition
----------------------
-`/metrics` and `/evaluation/argo` need more than the Phase 29A fixtures
-did: real `targets`/`target_mask`/`depth`/`split_masks` on the tensor
-bundle (so there is something to score), and, for a non-demo
-`/evaluation/argo` run, real preprocessing-metadata normalization
-statistics and a real ARGO CSV under `data_raw_path`. `build_repository`
-grows `with_targets`/`with_metadata`/`data_raw_path` for exactly that,
-kept optional so every Phase 29A fixture/test above is unaffected.
+`/evaluation/argo` — Phase 26 independent ARGO validation
+--------------------------------------------------------------
+Runs the exact pipeline `scripts/run_argo_validation.py` runs
+(`src.argo_validation.run_argo_validation`), sourcing NEER predictions
+from the repository's checkpoint (`predictions_from_checkpoint`) and ARGO
+profiles from whatever is found under `NEERRepository.data_raw_path`
+(`_discover_argo_source` below — the API has no `--argo`/`--neer-checkpoint`
+flags to pass by hand, so this is the auto-discovery a live service needs
+in their place). `demo=true` is an explicit, never-default opt-in to a
+clearly labelled `DEMO_SYNTHETIC` pipeline check (real predictions/ARGO
+data are still preferred and used when they are actually available; the
+labelled synthetic stand-ins from `src.argo_validation.demo` only fill in
+what demo mode couldn't otherwise get) — same "demo data is never
+validation" rule `src/argo_validation/pipeline.py` documents. A real
+(non-demo) run with no ARGO source anywhere under `data_raw_path` is a
+meaningful `503`, never a demo substitution.
 """
 
 from __future__ import annotations
 
-import json
-import sys
+import tempfile
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
-import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backend.app.errors import (
+    ArgoDataUnavailableError,
+    DataUnavailableError,
+    EvaluationFailedError,
+    InvalidParameterError,
+    ModelUnavailableError,
+)
+from backend.app.services.repository import NEERRepository
+from src.argo_validation import (
+    DEFAULT_DEMO_FILENAME,
+    ArgoValidationConfig,
+    NeerGrid,
+    NeerPredictions,
+    demo_stand_in_predictions,
+    generate_demo_argo,
+    load_argo,
+    predictions_from_checkpoint,
+    run_argo_validation,
+)
+from src.argo_validation.pipeline import _sanitize as _sanitize_report
+from src.argo_validation.profiles import ArgoProfileSet
+from src.data.loaders.errors import LoaderError, MissingDependencyError
+from src.evaluation.interface import SPLIT_NAMES, pool_tensor_bundle
+from src.evaluation.metrics import compute_profile_metrics
+from src.inference.service import InferenceService
 
-torch = pytest.importorskip("torch", reason="torch is an optional dependency")
-pytest.importorskip("fastapi", reason="fastapi is required to test the backend API")
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-from backend.app.dependencies import get_repository  # noqa: E402
-from backend.app.main import app  # noqa: E402
-from backend.app.services.repository import NEERRepository  # noqa: E402
-from src.data.preprocessing.channels import NEER_CHANNEL_ORDER, NEER_N_CHANNELS  # noqa: E402
-from src.data.preprocessing.tensors import TensorBundle  # noqa: E402
-from src.models.neer_model import NEERModel  # noqa: E402
-from src.utils.config import load_config  # noqa: E402
-
-#: Small but real spatial grid — well inside the demo/base domain
-#: (lat 5-30, lon 45-105), and a multiple of the ViT's 8-cell patch size
-#: so patching isn't degenerate.
-GRID_N_LAT = 16
-GRID_N_LON = 16
-LAT = np.linspace(10.0, 20.0, GRID_N_LAT)
-LON = np.linspace(50.0, 60.0, GRID_N_LON)
-DATES = ["2021-06-15", "2021-07-15", "2021-08-15"]
-ENVIRONMENT = "demo"
-
-#: The one target variable `configs/base.yaml`'s `tensors.target_variables`
-#: names (`src.data.preprocessing.tensors.DEFAULT_TARGETS`), and the model
-#: depths that same config declares — the source of truth for how many
-#: depth levels a fixture checkpoint's output (and therefore any fixture
-#: `targets` array) must have.
-TARGET_NAME = "subsurface_temp"
-DEPTHS: List[float] = [float(d) for d in load_config(ENVIRONMENT).depths]
-N_DEPTHS = len(DEPTHS)
+#: Conventional filenames this service looks for under `NEERRepository.data_raw_path`
+#: (matching the paths `README.md`'s `run_argo_validation.py` examples use:
+#: `data/raw/argo_profiles.csv`, `data/raw/argo_nc/`). `_discover_argo_source`
+#: falls back to any `.csv`/`.nc` actually found there so a differently-named
+#: real file is still picked up, without the API needing a `--argo`-style
+#: parameter the way the CLI script has one.
+_ARGO_CSV_NAME = "argo_profiles.csv"
+_ARGO_NC_DIRNAME = "argo_nc"
 
 
-def build_tensor_bundle(path: Path, *, seed: int = 0, with_targets: bool = False) -> Path:
-    """Write a small, real `TensorBundle` (`NEER_N_CHANNELS` channels,
-    `NEER_CHANNEL_ORDER` names, three monthly timesteps) to `path`.
+# --------------------------------------------------------------------------
+# /metrics
+# --------------------------------------------------------------------------
 
-    With `with_targets=True`, also writes a real `targets`/`target_mask`
-    (fully observed, `N_DEPTHS` levels matching the fixture checkpoint's
-    architecture), `depth`, and a `train`/`val`/`test` split — one
-    timestep each — so `/metrics` and `/evaluation/argo` have something
-    real to score. Phase 29A fixtures leave these unset (`with_targets`
-    defaults to `False`) since `/reconstruct` etc. don't need them and
-    `/metrics`'s "dataset has no targets" `503` is itself something a
-    test needs to exercise against a real, targetless bundle.
+
+def _predict_pooled_profiles(
+    service: InferenceService, inputs: np.ndarray, *, batch_size: int = 8
+) -> np.ndarray:
+    """Run `service`'s already-loaded `NEERModel` over `inputs`
+    (`(n_samples, n_channels, n_lat, n_lon)`), batched, and return its
+    `(n_samples, n_depth)` pooled-profile output.
+
+    Same forward-pass loop `scripts/run_evaluation.py::evaluate_neer_checkpoint`
+    and `src.argo_validation.predictions.predictions_from_checkpoint` use,
+    against the model `NEERRepository` already loaded — no re-parsing the
+    checkpoint file a second time.
     """
-    rng = np.random.default_rng(seed)
-    n_time = len(DATES)
-    inputs = rng.normal(0.0, 1.0, (n_time, NEER_N_CHANNELS, GRID_N_LAT, GRID_N_LON)).astype(
-        "float32"
-    )
-    kwargs = {}
-    if with_targets:
-        targets = rng.normal(0.0, 1.0, (n_time, N_DEPTHS, GRID_N_LAT, GRID_N_LON)).astype(
-            "float32"
+    import torch
+
+    n = int(inputs.shape[0])
+    if n == 0:
+        return np.empty((0, len(service.depths)), dtype=float)
+
+    model = service.model
+    outputs = []
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            batch = np.asarray(inputs[start : start + batch_size], dtype=np.float32)
+            x = torch.from_numpy(batch).to(service.device)
+            outputs.append(model(x).detach().cpu().numpy())
+    return np.concatenate(outputs, axis=0).astype(float)
+
+
+def metrics(repository: NEERRepository, *, split: str) -> Dict[str, Any]:
+    """Real NEER evaluation metrics for one data split (Requirement 3/4/6).
+
+    Raises `InvalidParameterError` for a `split` outside
+    `src.evaluation.interface.SPLIT_NAMES`; `DataUnavailableError` for a
+    dataset with no targets, no such split, or an empty split;
+    `ModelUnavailableError` for no loaded checkpoint; `EvaluationFailedError`
+    if scoring itself raises or the model's output shape doesn't match the
+    target it's being compared to.
+    """
+    if split not in SPLIT_NAMES:
+        raise InvalidParameterError(
+            f"split must be one of {list(SPLIT_NAMES)}, got {split!r}"
         )
-        kwargs["targets"] = targets
-        kwargs["target_mask"] = np.ones_like(targets, dtype=bool)
-        kwargs["target_names"] = [TARGET_NAME]
-        kwargs["depth"] = np.array(DEPTHS, dtype=float)
-        # One timestep per split — enough for `pool_tensor_bundle` to
-        # produce a non-empty `PooledSplit` for every split name.
-        split_masks = {name: np.zeros(n_time, dtype=bool) for name in ("train", "val", "test")}
-        for i, name in enumerate(("train", "val", "test")):
-            split_masks[name][i % n_time] = True
-        kwargs["split_masks"] = split_masks
 
-    bundle = TensorBundle(
-        inputs=inputs,
-        input_mask=np.ones_like(inputs, dtype=bool),
-        channel_names=list(NEER_CHANNEL_ORDER),
-        time=np.array(DATES, dtype="datetime64[ns]"),
-        lat=LAT,
-        lon=LON,
-        attrs={"data_mode": "DEMO_SYNTHETIC"},
-        **kwargs,
+    bundle = repository.require_bundle()
+    if bundle.targets is None or bundle.target_mask is None:
+        raise DataUnavailableError(
+            "the loaded dataset has no targets; cannot compute evaluation metrics "
+            "(run 'python scripts/preprocess_data.py' against a source with a target variable)"
+        )
+    if split not in bundle.split_masks:
+        raise DataUnavailableError(
+            f"the loaded dataset has no '{split}' split "
+            f"(available: {sorted(bundle.split_masks) or 'none'})"
+        )
+
+    try:
+        pooled = pool_tensor_bundle(
+            bundle, splits=(split,), source_tensors_path=repository.tensor_path
+        )[split]
+    except (KeyError, ValueError) as exc:
+        raise DataUnavailableError(str(exc)) from exc
+
+    if pooled.n_samples == 0:
+        raise DataUnavailableError(f"the '{split}' split has no samples to score")
+
+    service = repository.require_service()
+    mask = np.asarray(bundle.split_masks[split], dtype=bool)
+    try:
+        prediction = _predict_pooled_profiles(service, bundle.inputs[mask])
+    except (ValueError, RuntimeError) as exc:
+        raise EvaluationFailedError(f"metrics computation failed: {exc}") from exc
+
+    if prediction.shape != pooled.profile.shape:
+        raise EvaluationFailedError(
+            f"model output shape {prediction.shape} does not match the "
+            f"'{split}' split's target shape {pooled.profile.shape}"
+        )
+
+    profile_metrics = compute_profile_metrics(
+        pooled.profile,
+        prediction,
+        pooled.profile_mask,
+        depth_names=pooled.depth_names,
+        variable_names=pooled.variable_names or None,
     )
-    bundle.save(path)
-    return path
 
-
-def build_checkpoint(path: Path, *, seed: int = 0) -> Path:
-    """Write a real checkpoint — a `NEERModel.from_config(load_config("demo"))`
-    state dict — in the flat `{epoch, model_state_dict, args, ...}` shape
-    `scripts/train.py` writes (which is what `InferenceService.from_checkpoint`
-    / `NEERRepository` expect)."""
-    torch.manual_seed(seed)
-    config = load_config(ENVIRONMENT)
-    model = NEERModel.from_config(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "epoch": 1,
-            "model_state_dict": model.state_dict(),
-            "val_loss": 0.5,
-            "best_val_loss": 0.5,
-            "history": [],
-            "args": {"environment": ENVIRONMENT},
-        },
-        path,
-    )
-    return path
-
-
-def build_metadata(path: Path, *, target_name: str = TARGET_NAME, seed: int = 0) -> Path:
-    """Write a minimal real `neer_preprocessing_metadata.json` — just the
-    one `normalization` step's per-depth z-score `statistics`, which is
-    all `normalizer_stats_from_metadata` (used by both
-    `InferenceService.from_checkpoint` and
-    `src.argo_validation.predictions.predictions_from_checkpoint`) reads.
-    `center`/`scale` have one real (non-fabricated-result, just
-    arbitrary-but-valid) entry per fixture depth level.
-    """
-    rng = np.random.default_rng(seed)
-    center = rng.normal(15.0, 3.0, N_DEPTHS).tolist()
-    scale = np.abs(rng.normal(2.0, 0.5, N_DEPTHS)).tolist()
-    metadata = {
-        "steps": [
-            {
-                "step": "normalization",
-                "state": {
-                    "method": "zscore",
-                    "statistics": {target_name: {"center": center, "scale": scale}},
-                },
-            }
-        ]
+    return {
+        "phase": 25,
+        "split": split,
+        "n_samples": pooled.n_samples,
+        "is_synthetic": bool(bundle.is_synthetic),
+        "data_mode": str(bundle.attrs.get("data_mode", "UNKNOWN")),
+        "disclaimer": bundle.attrs.get("disclaimer"),
+        "source_tensors_path": str(repository.tensor_path),
+        "checkpoint": str(repository.checkpoint_path) if repository.checkpoint_path else None,
+        "metrics": profile_metrics.to_dict(),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f)
-    return path
-
-
-def build_argo_csv(path: Path) -> Path:
-    """Write a small, real long-format ARGO CSV — the same
-    `PLATFORM_NUMBER,CYCLE_NUMBER,JULD,LATITUDE,LONGITUDE,PRES,TEMP,TEMP_QC`
-    shape `tests/test_argo_validation.py` uses — two floats, six QC=1
-    levels each (above `ArgoValidationConfig.min_levels`'s default of
-    5), inside the fixture grid's lat/lon/time range. No `DEMO` float-id
-    prefix and no `.meta.json` sidecar, so `load_argo` labels it
-    `ARGO_USER_SUPPLIED` (real, non-demo) per `src/argo_validation/io.py`.
-    """
-    rows = ["PLATFORM_NUMBER,CYCLE_NUMBER,JULD,LATITUDE,LONGITUDE,PRES,TEMP,TEMP_QC\n"]
-    for float_id, lat, lon, date in (("6900001", 12.0, 55.0, "2021-06-15"), ("6900002", 15.0, 57.0, "2021-07-15")):
-        for pres in (5, 10, 20, 50, 100, 200):
-            temp = 28.0 - 0.02 * pres
-            rows.append(f"{float_id},1,{date}T00:00:00Z,{lat},{lon},{pres},{temp},1\n")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(rows))
-    return path
-
-
-def build_repository(
-    tmp_path: Path,
-    *,
-    with_data: bool = True,
-    with_model: bool = True,
-    with_targets: bool = False,
-    with_metadata: bool = False,
-    data_raw_path: Optional[Path] = None,
-    max_grid_points: int = 4096,
-) -> NEERRepository:
-    """A `NEERRepository` pointed entirely at fixture paths under `tmp_path`
-    — never the real `data/`/`artifacts/` trees. `with_data`/`with_model`
-    let a test build a repository that is honestly missing one component,
-    to exercise `503 data_unavailable` / `503 model_unavailable`.
-    `with_targets` adds real targets/depth/splits (Phase 29B-1, `/metrics`
-    and `/evaluation/argo`); `with_metadata` adds real normalization
-    statistics so a checkpoint's output can be converted to degC (needed
-    for a non-demo `/evaluation/argo` run). `data_raw_path` defaults to an
-    empty directory under `tmp_path` — never the real `data/raw` — so a
-    test controls exactly what ARGO source, if any, is found there.
-    """
-    tensor_path = tmp_path / "neer_tensors.npz"
-    if with_data:
-        build_tensor_bundle(tensor_path, with_targets=with_targets)
-
-    checkpoint_path = tmp_path / "neer_best.pt"
-    if with_model:
-        build_checkpoint(checkpoint_path)
-
-    metadata_path = tmp_path / "neer_preprocessing_metadata.json"
-    if with_metadata:
-        build_metadata(metadata_path)
-
-    return NEERRepository(
-        environment=ENVIRONMENT,
-        tensor_path=tensor_path,
-        metadata_path=metadata_path,  # written only when with_metadata=True -> otherwise absent
-        checkpoint_path=checkpoint_path,
-        climatology_path=tmp_path / "climatology.npz",  # never written -> absent
-        data_raw_path=data_raw_path if data_raw_path is not None else (tmp_path / "raw_empty"),
-        cache_size=8,
-        max_grid_points=max_grid_points,
-    )
-
-
-def client_for(repository: NEERRepository) -> TestClient:
-    """A `TestClient` against the real app, with `get_repository` overridden
-    to the given fixture repository instead of the app's lifespan-built one
-    (the standard FastAPI dependency-override pattern — see
-    `backend/app/dependencies.py`'s docstring)."""
-    app.dependency_overrides[get_repository] = lambda: repository
-    return TestClient(app)
-
-
-@pytest.fixture()
-def repository(tmp_path) -> NEERRepository:
-    """A fully-loaded repository: real data + real model (no targets)."""
-    return build_repository(tmp_path)
-
-
-@pytest.fixture()
-def client(repository) -> Iterator[TestClient]:
-    """A `TestClient` backed by a fully-loaded repository."""
-    test_client = client_for(repository)
-    try:
-        yield test_client
-    finally:
-        app.dependency_overrides.pop(get_repository, None)
-
-
-@pytest.fixture()
-def repository_no_model(tmp_path) -> NEERRepository:
-    """A repository with real data but no checkpoint at all."""
-    return build_repository(tmp_path, with_model=False)
-
-
-@pytest.fixture()
-def client_no_model(repository_no_model) -> Iterator[TestClient]:
-    test_client = client_for(repository_no_model)
-    try:
-        yield test_client
-    finally:
-        app.dependency_overrides.pop(get_repository, None)
-
-
-@pytest.fixture()
-def repository_no_data(tmp_path) -> NEERRepository:
-    """A repository with neither a tensor bundle nor a checkpoint."""
-    return build_repository(tmp_path, with_data=False, with_model=False)
-
-
-@pytest.fixture()
-def client_no_data(repository_no_data) -> Iterator[TestClient]:
-    test_client = client_for(repository_no_data)
-    try:
-        yield test_client
-    finally:
-        app.dependency_overrides.pop(get_repository, None)
-
-
-@pytest.fixture()
-def client_low_grid_limit(tmp_path) -> Iterator[TestClient]:
-    """A repository whose `max_grid_points` is small enough that the
-    fixture's own 16x16 grid trips the region-too-large check."""
-    repo = build_repository(tmp_path, max_grid_points=10)
-    test_client = client_for(repo)
-    try:
-        yield test_client
-    finally:
-        app.dependency_overrides.pop(get_repository, None)
 
 
 # --------------------------------------------------------------------------
-# Phase 29B-1 — /metrics and /evaluation/argo fixtures
+# /evaluation/argo
 # --------------------------------------------------------------------------
 
 
-@pytest.fixture()
-def repository_metrics(tmp_path) -> NEERRepository:
-    """Real data + real model + real targets/depth/splits — everything
-    `/metrics` needs to compute an actual score."""
-    return build_repository(tmp_path, with_targets=True)
+def _discover_argo_source(data_raw_path: Path) -> Optional[Path]:
+    """Find a real ARGO source under `data_raw_path`, or `None`.
+
+    Tries the conventional names `README.md`'s `run_argo_validation.py`
+    examples use first (`argo_profiles.csv`, an `argo_nc/` directory of
+    GDAC files), then falls back to any `.csv`/`.nc` file actually present
+    directly under `data_raw_path` — this service has no `--argo` flag a
+    caller can point at a specific file, unlike the CLI script.
+    """
+    data_raw_path = Path(data_raw_path)
+    if not data_raw_path.is_dir():
+        return None
+
+    conventional_csv = data_raw_path / _ARGO_CSV_NAME
+    if conventional_csv.is_file():
+        return conventional_csv
+
+    conventional_nc_dir = data_raw_path / _ARGO_NC_DIRNAME
+    if conventional_nc_dir.is_dir() and any(conventional_nc_dir.glob("*.nc")):
+        return conventional_nc_dir
+
+    csvs = sorted(data_raw_path.glob("*.csv"))
+    if csvs:
+        return csvs[0]
+
+    if any(data_raw_path.glob("*.nc")):
+        return data_raw_path
+
+    return None
 
 
-@pytest.fixture()
-def client_metrics(repository_metrics) -> Iterator[TestClient]:
-    test_client = client_for(repository_metrics)
+def _generate_demo_argo_profiles(grid: NeerGrid) -> ArgoProfileSet:
+    """A freshly-generated, clearly-labelled `DEMO_SYNTHETIC` profile set
+    covering `grid`'s domain/time range (`src.argo_validation.demo`),
+    written to a private temp directory (never the real `data/` tree —
+    concurrent requests each get their own) and loaded back through the
+    same `load_argo` a real file goes through."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="neer_argo_demo_"))
+    demo_path = generate_demo_argo(tmp_dir / DEFAULT_DEMO_FILENAME, grid)
+    return load_argo(demo_path)
+
+
+def _real_predictions(repository: NEERRepository, bundle) -> NeerPredictions:
+    """NEER predictions from the repository's loaded checkpoint, for a
+    real (non-demo) run. Requires both a checkpoint and preprocessing
+    metadata (to convert the model's z-scored output back to degC)."""
+    checkpoint_path = repository.checkpoint_path
+    if checkpoint_path is None or not Path(checkpoint_path).exists():
+        raise ModelUnavailableError(repository.model_error())
+
+    metadata_path = repository.metadata_path
+    if not Path(metadata_path).exists():
+        raise DataUnavailableError(
+            f"no preprocessing metadata at {metadata_path}; required to convert NEER's "
+            "output back to degC for ARGO validation "
+            "(run 'python scripts/preprocess_data.py', which writes it alongside the tensors)"
+        )
+
     try:
-        yield test_client
-    finally:
-        app.dependency_overrides.pop(get_repository, None)
+        return predictions_from_checkpoint(checkpoint_path, bundle, metadata_path)
+    except MissingDependencyError as exc:
+        raise ModelUnavailableError(str(exc)) from exc
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise EvaluationFailedError(f"could not obtain NEER predictions: {exc}") from exc
 
 
-@pytest.fixture()
-def repository_argo_demo(tmp_path) -> NEERRepository:
-    """Real data + real model + targets/depth (so `NeerGrid.from_bundle`
-    has a depth axis), but no preprocessing metadata and no ARGO source
-    under `data_raw_path` — the shape a `demo=true` pipeline-check run
-    needs (real predictions are attempted and used when they succeed;
-    demo mode only requires *a* prediction and *some* ARGO source, and
-    supplies the labelled synthetic stand-ins for both when they're
-    otherwise unavailable)."""
-    return build_repository(tmp_path, with_targets=True)
-
-
-@pytest.fixture()
-def client_argo_demo(repository_argo_demo) -> Iterator[TestClient]:
-    test_client = client_for(repository_argo_demo)
+def _real_argo_profiles(repository: NEERRepository) -> ArgoProfileSet:
+    """Real ARGO profiles from `NEERRepository.data_raw_path`, for a real
+    (non-demo) run. No source found or found-but-unreadable is a real
+    `503 argo_data_unavailable` — never a demo substitution."""
+    source = _discover_argo_source(repository.data_raw_path)
+    if source is None:
+        raise ArgoDataUnavailableError(
+            f"no ARGO data found under {repository.data_raw_path} "
+            "(expected e.g. 'argo_profiles.csv', a long-format CSV, or a directory of GDAC "
+            "*_prof.nc files); pass demo=true for a labelled pipeline check instead, or add "
+            "real ARGO data there"
+        )
     try:
-        yield test_client
-    finally:
-        app.dependency_overrides.pop(get_repository, None)
+        return load_argo(source)
+    except (LoaderError, OSError) as exc:
+        raise ArgoDataUnavailableError(f"could not load ARGO data from {source}: {exc}") from exc
 
 
-@pytest.fixture()
-def repository_argo_real(tmp_path) -> NEERRepository:
-    """Real data + real model + real metadata + a real ARGO CSV under
-    `data_raw_path` — everything a non-demo `/evaluation/argo` run needs
-    to produce a genuine (not necessarily profile-matching) validation
-    report end to end."""
-    raw_dir = tmp_path / "raw"
-    build_argo_csv(raw_dir / "argo_profiles.csv")
-    return build_repository(tmp_path, with_targets=True, with_metadata=True, data_raw_path=raw_dir)
+def _demo_predictions(repository: NEERRepository, bundle, grid: NeerGrid) -> NeerPredictions:
+    """Predictions for a `demo=true` run: a real checkpoint prediction is
+    tried first when both a checkpoint and metadata are actually present
+    (real numbers preferred over a stand-in whenever they're available),
+    falling back to the labelled `demo_stand_in_NOT_NEER` only when that
+    isn't possible — never raises."""
+    checkpoint_path = repository.checkpoint_path
+    metadata_path = repository.metadata_path
+    if (
+        checkpoint_path is not None
+        and Path(checkpoint_path).exists()
+        and Path(metadata_path).exists()
+    ):
+        try:
+            return predictions_from_checkpoint(checkpoint_path, bundle, metadata_path)
+        except (MissingDependencyError, ValueError, RuntimeError, OSError):
+            pass
+    return demo_stand_in_predictions(grid)
 
 
-@pytest.fixture()
-def client_argo_real(repository_argo_real) -> Iterator[TestClient]:
-    test_client = client_for(repository_argo_real)
+def _demo_argo_profiles(repository: NEERRepository, grid: NeerGrid) -> ArgoProfileSet:
+    """ARGO profiles for a `demo=true` run: a real source under
+    `data_raw_path` is tried first, falling back to a freshly-generated,
+    clearly-labelled `DEMO_SYNTHETIC` set only when none is found/readable
+    — never raises."""
+    source = _discover_argo_source(repository.data_raw_path)
+    if source is not None:
+        try:
+            return load_argo(source)
+        except (LoaderError, OSError):
+            pass
+    return _generate_demo_argo_profiles(grid)
+
+
+def argo_evaluation(repository: NEERRepository, *, demo: bool) -> Dict[str, Any]:
+    """Run the Phase 26 ARGO validation pipeline and return its report
+    (Requirement 5/6/7/8). `demo=False` (the default) is a real
+    validation attempt: a missing checkpoint/metadata or ARGO source
+    raises the appropriate `NeerApiError` rather than substituting demo
+    data. `demo=True` is an explicit opt-in to a labelled
+    `DEMO_SYNTHETIC` pipeline check — see this module's docstring.
+    """
+    bundle = repository.require_bundle()
     try:
-        yield test_client
-    finally:
-        app.dependency_overrides.pop(get_repository, None)
+        grid = NeerGrid.from_bundle(bundle)
+    except ValueError as exc:
+        raise DataUnavailableError(str(exc)) from exc
 
+    if demo:
+        predictions = _demo_predictions(repository, bundle, grid)
+        profiles = _demo_argo_profiles(repository, grid)
+    else:
+        predictions = _real_predictions(repository, bundle)
+        profiles = _real_argo_profiles(repository)
 
-@pytest.fixture()
-def repository_argo_no_source(tmp_path) -> NEERRepository:
-    """Real data + real model + targets/depth, but no ARGO data anywhere
-    under `data_raw_path` — the honest "no ARGO data available" case for
-    a non-demo run."""
-    return build_repository(tmp_path, with_targets=True)
-
-
-@pytest.fixture()
-def client_argo_no_source(repository_argo_no_source) -> Iterator[TestClient]:
-    test_client = client_for(repository_argo_no_source)
     try:
-        yield test_client
-    finally:
-        app.dependency_overrides.pop(get_repository, None)
+        result = run_argo_validation(profiles, grid, predictions, ArgoValidationConfig())
+    except ValueError as exc:
+        raise EvaluationFailedError(f"ARGO validation pipeline failed: {exc}") from exc
+
+    return _sanitize_report(result.report)
