@@ -138,6 +138,43 @@ the CSV, NumPy, and demo paths work without them installed.
 "DEMO_SYNTHETIC"`). Anything that reports results to a user should check
 `dataset.is_synthetic` and label the output accordingly.
 
+## Checkpoint management (Phase 27)
+
+`src/training/checkpoint.py` is the one place every training script saves and
+loads checkpoints. `scripts/train.py` uses it for `neer_best.pt` / `neer_last.pt`
+and `--resume`.
+
+```python
+from src.training.checkpoint import CheckpointManager
+
+mgr = CheckpointManager("artifacts/checkpoints", name="neer")
+mgr.save_last(model=model, optimizer=optimizer, epoch=epoch, seed=seed, config=config,
+              training_stats={"val_loss": val_loss, "history": history})
+if improved:
+    mgr.save_best(model=model, optimizer=optimizer, epoch=epoch, seed=seed,
+                  config=config, training_stats={"val_loss": val_loss})
+
+loaded = mgr.load_checkpoint(mgr.best_path, model=model, optimizer=optimizer, config=config)
+print(loaded.epoch, loaded.training_stats, loaded.report.warnings)
+```
+
+Each checkpoint bundles model + optimizer state with the epoch, seed, the
+resolved config (plus a fast `config_fingerprint` of its architecture-relevant
+fields), training statistics, parameter shapes, and git/project metadata
+(commit, branch, dirty flag — degrades to `{"available": false}` outside a repo
+or without git installed, never an error). A human-readable `.json` sidecar is
+written next to every `.pt` file. Saves are atomic (write-to-temp then rename),
+so a crash mid-write never corrupts the previous checkpoint.
+
+**Compatibility is checked before any weights are touched.** Loading diffs the
+checkpoint's stored parameter shapes against the live model: a shape mismatch is
+always a hard error (`CheckpointCompatibilityError`, raised before
+`load_state_dict` runs); missing/unexpected parameter names are errors under
+`strict=True` (the default) and warnings under `strict=False`. A config
+fingerprint mismatch is only a warning — the shape check is authoritative.
+Checkpoints saved before this module existed still load, as a `"legacy"`
+schema with best-effort compatibility checking.
+
 ## ARGO validation (Phase 26)
 
 `src/argo_validation/` validates NEER's predicted temperature profiles against ARGO
