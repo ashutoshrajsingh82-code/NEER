@@ -91,6 +91,7 @@ class NEERRepository:
         metadata_path: Optional[Path] = None,
         checkpoint_path: Optional[Path] = None,
         climatology_path: Optional[Path] = None,
+        data_raw_path: Optional[Path] = None,
         cache_size: int = 128,
         max_grid_points: int = DEFAULT_MAX_GRID_POINTS,
     ) -> None:
@@ -117,6 +118,10 @@ class NEERRepository:
         self.checkpoint_path = checkpoint_path or _find_checkpoint(
             _project_path(paths.get("artifacts_checkpoints", "artifacts/checkpoints"))
         )
+        #: Where GET /evaluation/argo looks for real ARGO data when `demo`
+        #: isn't requested (Phase 29B-1) — same config-derived-default
+        #: pattern as every other path here (Requirement 18).
+        self.data_raw_path = data_raw_path or _project_path(paths.get("data_raw", "data/raw"))
 
         self.bundle: Optional[TensorBundle] = None
         self._date_index: Dict[str, int] = {}
@@ -378,6 +383,26 @@ class NEERRepository:
                 self._errors.get("model", "no NEER model checkpoint is loaded")
             )
         return self.service
+
+    # -- public accessors for the evaluation layer (Phase 29B-1) -----------
+    #
+    # `backend/app/services/evaluation.py` builds on `bundle`/`service`
+    # exactly like `reconstruct_point` etc. below do; these are the same
+    # "raise a real NeerApiError, never fabricate" checks as `_require_service`,
+    # just public since evaluation.py lives outside this class.
+
+    def require_bundle(self) -> TensorBundle:
+        if self.bundle is None:
+            raise DataUnavailableError(self._errors.get("data", "no dataset is loaded"))
+        return self.bundle
+
+    def require_service(self) -> InferenceService:
+        return self._require_service()
+
+    def model_error(self) -> str:
+        """Human-readable reason no model is loaded, for callers (e.g. the
+        evaluation layer) that want to explain *why* without raising."""
+        return self._errors.get("model", "no NEER model checkpoint is loaded")
 
     def reconstruct_point(self, *, lat: float, lon: float, date: str, depth: float) -> PredictionResult:
         self._validate_latlon(lat, lon)
