@@ -138,6 +138,43 @@ the CSV, NumPy, and demo paths work without them installed.
 "DEMO_SYNTHETIC"`). Anything that reports results to a user should check
 `dataset.is_synthetic` and label the output accordingly.
 
+## ARGO validation (Phase 26)
+
+`src/argo_validation/` validates NEER's predicted temperature profiles against ARGO
+float profiles. It is **separate from** the reanalysis/test-target evaluation in
+`src/evaluation` (different data, matching and outputs; only the four scalar metric
+functions are shared) and writes to `reports/argo_validation/`.
+
+```
+ARGO profiles -> QC -> time matching -> spatial matching
+  -> vertical interpolation -> NEER prediction -> comparison -> metrics
+```
+
+Reported: float count, profile count, matched profiles, depth coverage, RMSE, MAE,
+bias (NEER - ARGO) and correlation — overall, per depth and per NEER split.
+
+```bash
+# real ARGO data (long-format CSV, GDAC *_prof.nc, or a directory of .nc files)
+python scripts/run_argo_validation.py --argo data/raw/argo_profiles.csv \
+    --neer-checkpoint artifacts/checkpoints/neer_best.pt
+python scripts/run_argo_validation.py --argo data/raw/argo_nc/ --predictions preds.npz
+
+# no real ARGO data: a clearly labelled SYNTHETIC demo (pipeline check only)
+python scripts/run_argo_validation.py --demo
+```
+
+⚠️ **Demo ARGO data is synthetic and never observational validation.** `--demo` is the
+only way demo profiles are created; every output is prefixed `DEMO_SYNTHETIC_`, the
+report has `observational_validation: false` and files its numbers under
+`pipeline_check_metrics` (not `metrics`). Without a checkpoint, demo runs use a stand-in
+predictor labelled `demo_stand_in_NOT_NEER`.
+
+Read before interpreting real results: NEER currently outputs one **domain-pooled**
+profile per month, so each ARGO profile is compared to the month's basin-mean profile
+(the error includes spatial spread); and profiles in NEER's *train* months may not be
+independent of the model if its targets derive from ARGO — use the `test`/`val` rows of
+`by_split`.
+
 ## Data validation
 
 `src/data/validation/` audits a loaded dataset against the project
