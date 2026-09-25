@@ -5,7 +5,7 @@ Neural Embedding based Estimation and Reconstruction
 SIH Problem Statement: SIH26066
 Organization: MoES / INCOIS
 
-Phase 29A/29B-1 — core API. The app itself does nothing but wiring: build one
+Phase 29A/29B — core API. The app itself does nothing but wiring: build one
 `NEERRepository` at startup (loading whatever data/checkpoint actually
 exist on disk, once — see `backend/app/services/repository.py`), attach
 it to `app.state`, mount the routers, and translate `NeerApiError`
@@ -25,14 +25,17 @@ from fastapi.responses import JSONResponse
 
 from backend.app.errors import NeerApiError
 from backend.app.routers import (
+    data_quality,
     dates,
     embedding,
     evaluation,
+    explainability,
     health,
     metrics,
     model_info,
     profile,
     reconstruct,
+    reconstruct_netcdf,
 )
 from backend.app.services.repository import NEERRepository
 
@@ -59,7 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="NEER API",
     description="Neural Embedding based Estimation and Reconstruction — Backend API",
-    version="0.29.1",
+    version="0.29.2",
     lifespan=lifespan,
 )
 
@@ -94,6 +97,9 @@ app.include_router(profile.router)
 app.include_router(embedding.router)
 app.include_router(metrics.router)
 app.include_router(evaluation.router)
+app.include_router(explainability.router)
+app.include_router(data_quality.router)
+app.include_router(reconstruct_netcdf.router)
 
 
 @app.get("/", include_in_schema=False)

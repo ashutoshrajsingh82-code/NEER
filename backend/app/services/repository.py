@@ -28,6 +28,7 @@ or a prediction.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -42,6 +43,8 @@ from backend.app.errors import (
     InferenceFailedError,
     InvalidParameterError,
     ModelUnavailableError,
+    NetCDFGenerationFailedError,
+    NetCDFUnavailableError,
 )
 from src.data.loaders.errors import MissingDependencyError
 from src.data.preprocessing._utils import json_safe
@@ -484,6 +487,10 @@ class NEERRepository:
         anomaly; a specific `depth` is snapped to the nearest model depth
         level, same convention as `reconstruct_point`.
         """
+        if depth is not None and depth < 0:
+            raise InvalidParameterError("depth must be non-negative")
+        if self.bundle is None:
+            raise DataUnavailableError(self._errors.get("data", "no dataset is loaded"))
         service = self._require_service()
         x = self._input_for_date(date)
         channel_names = (
@@ -492,8 +499,6 @@ class NEERRepository:
 
         depth_index: Optional[int] = None
         if depth is not None:
-            if depth < 0:
-                raise InvalidParameterError("depth must be non-negative")
             depth_index = int(np.argmin(np.abs(np.asarray(service.depths) - float(depth))))
 
         from src.explainability.gradients import explain_point
@@ -545,3 +550,140 @@ class NEERRepository:
         except (ValueError, KeyError) as exc:
             raise DataQualityFailedError(f"data quality computation failed: {exc}") from exc
         return json_safe(report)
+
+    # -- NetCDF reconstruction (Phase 29B-2) ---------------------------------
+
+    def reconstruct_netcdf(
+        self,
+        *,
+        lat_min: float,
+        lat_max: float,
+        lon_min: float,
+        lon_max: float,
+        date: str,
+        depth: Optional[float] = None,
+    ) -> Path:
+        """Write a real `reconstruct_grid()` result to a NetCDF file.
+
+        Builds an `OceanDataset` from the actual `PredictionResult` (never
+        a fabricated grid), then hands it to `save_netcdf`. A missing
+        xarray/NetCDF engine is `NetCDFUnavailableError` (503); any
+        failure assembling or writing the file is
+        `NetCDFGenerationFailedError` (500) — never an empty or dummy
+        `.nc` in its place.
+        """
+        result = self.reconstruct_grid(
+            lat_min=lat_min,
+            lat_max=lat_max,
+            lon_min=lon_min,
+            lon_max=lon_max,
+            date=date,
+            depth=depth,
+        )
+        handle = tempfile.NamedTemporaryFile(
+            prefix="neer_reconstruct_", suffix=".nc", delete=False
+        )
+        handle.close()
+        path = Path(handle.name)
+        try:
+            from src.data.loaders import save_netcdf
+
+            dataset = _ocean_dataset_from_grid_result(result)
+            return save_netcdf(dataset, path)
+        except MissingDependencyError as exc:
+            _unlink_quietly(path)
+            raise NetCDFUnavailableError(str(exc)) from exc
+        except (ValueError, TypeError, OSError, RuntimeError) as exc:
+            _unlink_quietly(path)
+            raise NetCDFGenerationFailedError(
+                f"NetCDF generation failed: {exc}"
+            ) from exc
+
+
+def _unlink_quietly(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def _ocean_dataset_from_grid_result(result: PredictionResult):
+    """Turn a real grid `PredictionResult` into an `OceanDataset`.
+
+    Axes follow `OceanDataset`'s canonical order (`time`, then `depth`
+    when every model depth was returned, then `lat`/`lon`). Values are
+    the arrays `predict_grid` already produced — nothing is synthesized
+    or resampled here.
+    """
+    from src.data.loaders.representation import OceanDataset, Variable
+
+    lat = np.asarray(result.lat, dtype=np.float64)
+    lon = np.asarray(result.lon, dtype=np.float64)
+    temperature = np.asarray(result.temperature, dtype=np.float32)
+    time = np.array([np.datetime64(result.date, "ns")])
+
+    coords: Dict[str, np.ndarray] = {"time": time, "lat": lat, "lon": lon}
+    variables: Dict[str, Variable] = {}
+
+    if temperature.ndim == 2:
+        temp_values = temperature[np.newaxis, ...]
+        temp_dims = ("time", "lat", "lon")
+        depth_attr: Optional[float] = float(np.asarray(result.depth).reshape(-1)[0])
+    elif temperature.ndim == 3:
+        depth = np.asarray(result.depth, dtype=np.float64)
+        coords["depth"] = depth
+        # (n_lat, n_lon, n_depth) -> (time, depth, lat, lon)
+        temp_values = np.transpose(temperature, (2, 0, 1))[np.newaxis, ...]
+        temp_dims = ("time", "depth", "lat", "lon")
+        depth_attr = None
+    else:
+        raise ValueError(
+            "grid reconstruction temperature must be (n_lat, n_lon) or "
+            f"(n_lat, n_lon, n_depth); got shape {temperature.shape}"
+        )
+
+    temp_attrs: Dict[str, Any] = {
+        "long_name": "reconstructed sea water temperature",
+        "source": "NEER reconstruct_grid",
+    }
+    if depth_attr is not None:
+        temp_attrs["depth_m"] = depth_attr
+
+    variables["temperature"] = Variable(
+        name="temperature",
+        values=temp_values,
+        dims=temp_dims,
+        units="degC",
+        attrs=temp_attrs,
+    )
+
+    if result.climatology is not None:
+        climatology = np.asarray(result.climatology, dtype=np.float32)
+        if climatology.shape == temperature.shape:
+            if climatology.ndim == 2:
+                clim_values = climatology[np.newaxis, ...]
+            else:
+                clim_values = np.transpose(climatology, (2, 0, 1))[np.newaxis, ...]
+            variables["climatology"] = Variable(
+                name="climatology",
+                values=clim_values,
+                dims=temp_dims,
+                units="degC",
+                attrs={"long_name": "fitted climatology used to form reconstructed temperature"},
+            )
+
+    notes = "; ".join(str(n) for n in result.notes) if result.notes else ""
+    return OceanDataset(
+        variables=variables,
+        coords=coords,
+        attrs={
+            "title": "NEER reconstructed temperature grid",
+            "source": "NEER /reconstruct/netcdf",
+            "data_mode": result.data_mode,
+            "date": str(result.date),
+            "cache_hit": int(bool(result.cache_hit)),
+            "notes": notes,
+        },
+        source="neer.reconstruct_grid",
+        source_format="netcdf",
+    )

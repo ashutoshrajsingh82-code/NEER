@@ -126,6 +126,24 @@ class ArgoEvaluationQueryParams(BaseModel):
     )
 
 
+class ExplainabilityQueryParams(BaseModel):
+    date: _Date = Field(..., description="Date to explain, YYYY-MM-DD.")
+    depth: Optional[float] = Field(
+        None,
+        ge=0,
+        description="Single target depth in metres; omit to explain every model depth level summed.",
+    )
+
+
+def explainability_query_params(
+    date: _Date = Query(..., description="Date to explain, YYYY-MM-DD."),
+    depth: Optional[float] = Query(
+        None, ge=0, description="Single depth in metres; omit for a whole-profile explanation."
+    ),
+) -> ExplainabilityQueryParams:
+    return ExplainabilityQueryParams(date=date, depth=depth)
+
+
 def argo_evaluation_query_params(
     demo: bool = Query(
         False,
@@ -311,5 +329,51 @@ class ArgoEvaluationResponse(BaseModel):
     pipeline_check_metrics: Optional[Dict[str, Any]] = None
     warnings: List[str]
     limitations: List[str]
+
+    model_config = {"extra": "allow"}
+
+
+# --------------------------------------------------------------------------
+# Phase 29B-2 — /explainability and /data/quality response schemas
+#
+# Mirror `NEERRepository.explain()` / `src.explainability.gradients.explain_point`
+# and `NEERRepository.data_quality()` field-for-field. `/reconstruct/netcdf`
+# returns a file via `FileResponse`, so it has no JSON response model here.
+# --------------------------------------------------------------------------
+
+
+class ExplainabilityChannel(BaseModel):
+    name: str
+    description: Optional[str] = None
+    importance: float
+    mean_gradient: float
+
+
+class ExplainabilityResponse(BaseModel):
+    date: str
+    data_mode: str
+    predicted_anomaly: float
+    depth: Optional[float] = None
+    depth_index: Optional[int] = None
+    aggregated_over_depths: bool
+    method: str
+    channels: List[ExplainabilityChannel]
+    spatial_saliency: List[List[float]]
+    spatial_saliency_shape: List[int]
+    full_grid_shape: List[int]
+    embedding_dim: int
+    notes: List[str]
+
+
+class DataQualityResponse(BaseModel):
+    data_mode: str
+    is_synthetic: bool
+    disclaimer: Optional[str] = None
+    source_tensors_path: str
+    dates: Dict[str, Any]
+    summary: Dict[str, Any]
+    spatial_coverage: Dict[str, Any]
+    channels: Dict[str, Any]
+    targets: Optional[Dict[str, Any]] = None
 
     model_config = {"extra": "allow"}

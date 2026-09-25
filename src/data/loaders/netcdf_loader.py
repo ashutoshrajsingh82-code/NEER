@@ -247,11 +247,18 @@ def save_netcdf(
 
     xr_dataset = dataset.to_xarray()
 
-    # NetCDF attributes cannot contain Python dictionaries.
-    # Serialize dictionary attributes as JSON strings before writing.
-    for key, value in list(xr_dataset.attrs.items()):
-        if isinstance(value, dict):
-            xr_dataset.attrs[key] = json.dumps(value)
+    # NetCDF attributes cannot contain Python dictionaries or booleans.
+    # Serialize dictionary attributes as JSON strings and booleans as integers before writing.
+    def _sanitize_attrs(attrs: dict) -> None:
+        for key, value in list(attrs.items()):
+            if isinstance(value, dict):
+                attrs[key] = json.dumps(value)
+            elif isinstance(value, (bool, np.bool_)):
+                attrs[key] = int(value)
+
+    _sanitize_attrs(xr_dataset.attrs)
+    for var in xr_dataset.variables.values():
+        _sanitize_attrs(var.attrs)
 
     xr_dataset.to_netcdf(
         path,

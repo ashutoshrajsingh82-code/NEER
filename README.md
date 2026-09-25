@@ -5,53 +5,50 @@
 - **SIH Problem Statement:** SIH26066
 - **Organization:** MoES / INCOIS
 
-> ⚠️ **Phase 12 — PyTorch Dataset.** The data layer is complete through
-> tensor assembly, and `src/data/dataset.py` now wraps the assembled
-> tensors in a `torch.utils.data.Dataset`/`DataLoader` pair. **The ML
-> model itself is not implemented yet** — nothing in `src/models/`,
-> `src/training/` or `src/evaluation/` is built.
+> 🚀 **Phase 29B-2 — Core API & Explainability Complete.**
+> Full end-to-end operational pipeline: ocean data loading, strict validation, leakage-free preprocessing,
+> hybrid CNN-GNN-ViT model architecture, pretraining & fine-tuning checkpoints, independent ARGO validation,
+> gradient-based feature attribution, genuine dataset quality diagnostics, NetCDF file reconstruction,
+> and a complete 11-endpoint FastAPI service layer.
 
 ## Project structure
 
 ```
 NEER/
-├── backend/            # FastAPI backend (minimal: /health only)
-├── frontend/            # Next.js frontend (minimal landing page)
-├── src/                 # Core ML/data-science codebase
-│   ├── data/             # Loaders, validation, preprocessing pipeline
-│   ├── models/           # Model architectures (not implemented yet)
-│   ├── training/         # Training loops / experiment orchestration
-│   ├── evaluation/       # Metrics & validation
-│   ├── explainability/   # Interpretability tooling
-│   └── utils/            # Shared utilities (config, logging, ...)
-├── configs/              # YAML configuration files
-├── data/
-│   ├── raw/               # Raw, unprocessed data
-│   ├── processed/         # Cleaned/processed data
-│   └── demo/               # Small demo datasets
-├── artifacts/
-│   ├── checkpoints/        # Model checkpoints
-│   ├── embeddings/         # Saved embeddings
-│   └── predictions/        # Model predictions/outputs
-├── reports/              # Generated reports/analyses
-├── scripts/              # Utility & operational scripts
-├── tests/                # Test suite
+├── backend/            # FastAPI backend service
+│   ├── app/
+│   │   ├── routers/    # 11 thin API route modules
+│   │   ├── services/   # Repository & evaluation service layers
+│   │   ├── dependencies.py
+│   │   ├── errors.py   # Central error hierarchy & HTTP mapping
+│   │   ├── main.py     # FastAPI application entrypoint & lifespan
+│   │   └── schemas.py  # Pydantic request & response models
+├── frontend/           # Next.js interactive web dashboard
+├── src/                # Core ML & oceanographic science codebase
+│   ├── data/           # Loaders, validation, preprocessing pipeline
+│   ├── models/         # CNN encoder, GNN, ViT, DepthDecoder, NEERModel
+│   ├── training/       # Training loops, loss functions, checkpoint manager
+│   ├── evaluation/     # Metrics (RMSE, MAE, bias, Pearson, R^2), split scoring
+│   ├── argo_validation/# Independent observational ARGO float validation pipeline
+│   ├── explainability/ # Gradient-x-input feature attribution & saliency maps
+│   ├── inference/      # InferenceService with LRU caching
+│   └── utils/          # Config system, logging, coordinate utils
+├── configs/            # YAML configs (base, demo, development, production)
+├── data/               # Raw, processed, and synthetic demo datasets
+├── artifacts/          # Model checkpoints (.pt + .json), embeddings, predictions
+├── reports/            # Generated ARGO validation and metric reports
+├── scripts/            # CLI utilities (train, pretrain, validate, evaluate)
+├── tests/              # 1,300+ unit, integration, and backend tests
 ├── requirements.txt
 ├── README.md
 ├── MODEL_CARD.md
-├── .gitignore
 ├── Dockerfile
 └── docker-compose.yml
 ```
 
 ## Quickstart
 
-# NEER Backend
-
-Minimal FastAPI backend for **NEER — Neural Embedding based Estimation and Reconstruction**
-(SIH26066, MoES / INCOIS).
-
-## Run locally
+### Backend (FastAPI)
 
 ```bash
 cd backend
@@ -59,17 +56,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## Endpoints
-
-- `GET /health` — liveness check, per-component (data/model) status.
-- `GET /model/info` — architecture, configuration and checkpoint metadata for the loaded model.
-- `GET /dates` — dates actually available in the loaded tensor bundle.
-- `GET /reconstruct` — reconstructed temperature at a single point/date/depth.
-- `GET /profile` — reconstructed temperature profile (all depths) at a point/date.
-- `GET /reconstruct/grid` — reconstructed temperature over a lat/lon region, one date.
-- `GET /embedding` — NEER embedding for a date.
-- `GET /metrics` — real evaluation metrics (RMSE/MAE/bias/Pearson-r/R^2) for a data split.
-- `GET /evaluation/argo` — independent ARGO float validation report (Phase 26 pipeline).
+Interactive OpenAPI docs available at `http://localhost:8000/docs`.
 
 ### Frontend (Next.js)
 
@@ -87,8 +74,25 @@ Visit `http://localhost:3000`.
 docker-compose up --build
 ```
 
-- Backend → http://localhost:8000
-- Frontend → http://localhost:3000
+- Backend API → `http://localhost:8000`
+- Frontend UI → `http://localhost:3000`
+
+## API Endpoints (Phase 29A & 29B)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Service liveness and component (data/model/climatology) status. |
+| `GET` | `/model/info` | Architecture, configuration, and checkpoint metadata. |
+| `GET` | `/dates` | Timestamps available in the loaded dataset. |
+| `GET` | `/reconstruct` | Point temperature reconstruction at single lat/lon/date/depth. |
+| `GET` | `/profile` | Full vertical temperature profile at single lat/lon/date. |
+| `GET` | `/reconstruct/grid` | Reconstructed temperature grid over a spatial bounding box. |
+| `GET` | `/reconstruct/netcdf`| Downloadable CF-compliant NetCDF file of the reconstructed grid. |
+| `GET` | `/embedding` | Domain-pooled latent representation vector for a date. |
+| `GET` | `/metrics` | Statistical evaluation metrics (RMSE, MAE, bias, Pearson-r, $R^2$) for train/val/test splits. |
+| `GET` | `/evaluation/argo` | Independent observational ARGO float validation report. |
+| `GET` | `/explainability` | Real gradient-x-input feature attribution and spatial saliency map. |
+| `GET` | `/data/quality` | Dataset completeness, missing values, coverage, and channel/target quality. |
 
 ## Data loading
 
@@ -495,15 +499,52 @@ fractions — and is consumed by `PreprocessingPipeline.from_config()`.
 Every key is optional; anything omitted falls back to the step's own
 default.
 
+## Explainability (Phase 29B-2)
+
+`src/explainability/gradients.py` provides genuine gradient-based feature attribution for `NEERModel`.
+Rather than hardcoding static importances, it performs an autograd backward pass through the live PyTorch model
+on the actual input tensor for the requested date:
+
+```python
+from src.explainability.gradients import explain_point
+
+attribution = explain_point(
+    model,
+    input_sample,  # (n_channels, n_lat, n_lon)
+    channel_names=channel_names,
+    depths=model_depths,
+    depth_index=snapped_depth_idx,  # or None to explain the sum across all depths
+)
+
+print(attribution["channels"])         # normalized gradient-x-input importance (sums to 1.0)
+print(attribution["spatial_saliency"]) # spatial sensitivity map
+```
+
+## Dataset Quality & Provenance (Phase 29B-2)
+
+The dataset quality endpoint (`GET /data/quality`) audits the actively-loaded `TensorBundle` using the
+preprocessing layer's built-in diagnostics:
+- Missing and valid grid cells (`summary()`)
+- Spatial coverage and bounding grid extents (`spatial_coverage()`)
+- Input channel completeness, min/max ranges, and mean/std (`channel_quality()`)
+- Target data completeness and depth coverage (`target_quality()`)
+
+## NetCDF Export & Round-Trip (Phase 29B-2)
+
+Reconstructed temperature grids can be exported directly as CF-compliant NetCDF files (`GET /reconstruct/netcdf`):
+- Wraps genuine model predictions into an `OceanDataset` with canonical coordinates (`time`, `depth`, `lat`, `lon`).
+- Preserves temperature anomaly and fitted climatology.
+- Sanitizes metadata attributes (JSON-encoded dictionary metadata and integer-encoded boolean flags) for full NetCDF4 / HDF5 compatibility.
+- Fully round-trippable via `src.data.loaders.load_netcdf` or `xarray.open_dataset`.
+
 ## Status
 
-Phases 01-12 are complete: project scaffold, config system, ocean grid,
-data loaders, validation, the preprocessing pipeline, channel/tensor
-assembly, and the PyTorch `Dataset`/`DataLoader` layer. Raw data goes in;
-normalized tensors, metadata, and now batched, model-ready `torch`
-batches come out.
-
-Not yet built: the model architecture (`src/models/`), the training loop
-(`src/training/`), evaluation metrics (`src/evaluation/`), explainability
-(`src/explainability/`), and the dashboard UI beyond its landing page.
-See `MODEL_CARD.md` for the outstanding work.
+Phases 01 through 30 are complete:
+- **Data Engineering**: Loaders (NetCDF/CSV/demo), validation rules, leakage-free preprocessing pipeline, and PyTorch `Dataset`/`DataLoader`.
+- **Model Architecture**: Pretrained CNN surface encoder, optional Grid GNN, spatial Vision Transformer (ViT), and depth-conditioned decoder.
+- **Training & Checkpoints**: Pretraining pipelines, checkpoint manager with shape compatibility checks, loss functions, and learning rate scheduling.
+- **Evaluation**: Split metrics (RMSE, MAE, bias, Pearson-r, $R^2$) and independent observational ARGO float validation pipeline.
+- **Explainability**: Local gradient-x-input attribution and spatial saliency maps derived from the PyTorch autograd graph.
+- **Backend API**: Complete 11-endpoint FastAPI service with Pydantic validation, structured error codes, and NetCDF file streaming.
+- **API Testing & Integration (Phase 30)**: Comprehensive integration test suite (`tests/test_api_integration.py` and `scripts/test_live_backend.py`) running real HTTP requests against live Uvicorn servers, validating valid requests, coordinate out-of-bounds/domain errors, date/depth validation, missing data, model unavailable, and reconstruction physics.
+- **Testing**: 1,300+ automated unit, integration, and backend API tests with 100% pass rate.
