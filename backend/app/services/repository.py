@@ -34,8 +34,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from backend.app.errors import (
+    DataQualityFailedError,
     DataUnavailableError,
     DateNotFoundError,
+    ExplainabilityFailedError,
     GridUnavailableError,
     InferenceFailedError,
     InvalidParameterError,
@@ -469,3 +471,77 @@ class NEERRepository:
             "cache_hit": result.cache_hit,
             "latency_ms": result.latency_ms,
         }
+
+    # -- explainability (Phase 29B-2) ---------------------------------------
+
+    def explain(self, *, date: str, depth: Optional[float] = None) -> Dict[str, Any]:
+        """Real gradient-based explainability for one date (Requirement 1).
+
+        Runs an actual backward pass through the actual loaded model on
+        the actual input tensor for `date` (`src.explainability.gradients.
+        explain_point`) — never a fabricated/random/placeholder score.
+        `depth=None` explains the sum of every model depth level's
+        anomaly; a specific `depth` is snapped to the nearest model depth
+        level, same convention as `reconstruct_point`.
+        """
+        service = self._require_service()
+        x = self._input_for_date(date)
+        channel_names = (
+            self.bundle.channel_names if self.bundle is not None else list(DEFAULT_TARGETS)
+        )
+
+        depth_index: Optional[int] = None
+        if depth is not None:
+            if depth < 0:
+                raise InvalidParameterError("depth must be non-negative")
+            depth_index = int(np.argmin(np.abs(np.asarray(service.depths) - float(depth))))
+
+        from src.explainability.gradients import explain_point
+
+        try:
+            result = explain_point(
+                service.model,
+                x,
+                channel_names=channel_names,
+                depths=service.depths,
+                depth_index=depth_index,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise ExplainabilityFailedError(f"explainability computation failed: {exc}") from exc
+
+        result["date"] = str(date)
+        result["data_mode"] = service.data_mode
+        return result
+
+    # -- data quality (Phase 29B-2) ------------------------------------------
+
+    def data_quality(self) -> Dict[str, Any]:
+        """Real NEER dataset quality (Requirement 2): reuses `TensorBundle`'s
+        own summary/coverage/channel/target reporting — nothing here
+        invents a statistic the loaded bundle doesn't already carry.
+
+        Raises `DataUnavailableError` (503) if no dataset is loaded, and
+        `DataQualityFailedError` (500) if computing the report itself
+        raises for an otherwise-loaded bundle.
+        """
+        bundle = self.require_bundle()
+        try:
+            dates = self.list_dates()
+            report: Dict[str, Any] = {
+                "data_mode": str(bundle.attrs.get("data_mode", "UNKNOWN")),
+                "is_synthetic": bool(bundle.is_synthetic),
+                "disclaimer": bundle.attrs.get("disclaimer"),
+                "source_tensors_path": str(self.tensor_path),
+                "dates": {
+                    "count": dates["count"],
+                    "min_date": dates["min_date"],
+                    "max_date": dates["max_date"],
+                },
+                "summary": bundle.summary(),
+                "spatial_coverage": bundle.spatial_coverage(),
+                "channels": bundle.channel_quality(),
+                "targets": bundle.target_quality(),
+            }
+        except (ValueError, KeyError) as exc:
+            raise DataQualityFailedError(f"data quality computation failed: {exc}") from exc
+        return json_safe(report)

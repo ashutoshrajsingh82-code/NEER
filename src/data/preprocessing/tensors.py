@@ -256,6 +256,92 @@ class TensorBundle:
         coverage["by_period"] = by_period
         return json_safe(coverage)
 
+    def channel_quality(self) -> Dict[str, Any]:
+        """Per-input-channel data quality (Phase 29B-2, `GET /data/quality`).
+
+        For every channel: how much of it is genuinely observed
+        (`input_mask`, never inferred from `inputs` itself, which is
+        never NaN — see this module's docstring) and the value range of
+        only the observed cells. Computing a range straight off `inputs`
+        would silently include the fill value wherever a cell is masked
+        out, so observed cells are selected via the mask first.
+        """
+        from src.data.loaders.missing import finite_range
+        from src.data.preprocessing.channels import CHANNEL_DESCRIPTIONS
+
+        report: Dict[str, Any] = {}
+        for index, name in enumerate(self.channel_names):
+            values = self.inputs[:, index]
+            mask = np.asarray(self.input_mask[:, index], dtype=bool)
+            observed = np.where(mask, values, np.nan)
+            value_range = finite_range(observed)
+            n_total = int(values.size)
+            n_valid = int(mask.sum())
+            report[name] = {
+                "description": CHANNEL_DESCRIPTIONS.get(name),
+                "n_cells": n_total,
+                "n_valid": n_valid,
+                "n_missing": n_total - n_valid,
+                "valid_fraction": round(n_valid / n_total, 6) if n_total else None,
+                "min": None if value_range is None else value_range[0],
+                "max": None if value_range is None else value_range[1],
+                "mean": None if n_valid == 0 else float(np.nanmean(observed)),
+            }
+        return json_safe(report)
+
+    def target_quality(self) -> Optional[Dict[str, Any]]:
+        """Target-data quality (Phase 29B-2, `GET /data/quality`), or
+        `None` when this bundle carries no targets.
+
+        Same "mask decides what counts as observed" rule as
+        `channel_quality`, broken down per depth level using `self.depth`
+        (falling back to a plain integer index when no depth axis was
+        recorded).
+        """
+        if self.targets is None or self.target_mask is None:
+            return None
+        from src.data.loaders.missing import finite_range
+
+        values = self.targets
+        mask = np.asarray(self.target_mask, dtype=bool)
+        observed = np.where(mask, values, np.nan)
+        overall_range = finite_range(observed)
+        n_total = int(values.size)
+        n_valid = int(mask.sum())
+
+        n_levels = values.shape[1]
+        depths = (
+            [float(d) for d in self.depth]
+            if self.depth is not None and len(self.depth) == n_levels
+            else list(range(n_levels))
+        )
+        per_depth: Dict[str, Any] = {}
+        for i, depth_label in enumerate(depths):
+            level_values = observed[:, i]
+            level_mask = mask[:, i]
+            level_range = finite_range(level_values)
+            n_level = int(level_mask.size)
+            n_level_valid = int(level_mask.sum())
+            per_depth[f"{depth_label:g}" if isinstance(depth_label, float) else str(depth_label)] = {
+                "n_cells": n_level,
+                "n_valid": n_level_valid,
+                "valid_fraction": round(n_level_valid / n_level, 6) if n_level else None,
+                "min": None if level_range is None else level_range[0],
+                "max": None if level_range is None else level_range[1],
+            }
+
+        return json_safe(
+            {
+                "variables": list(self.target_names),
+                "n_cells": n_total,
+                "n_valid": n_valid,
+                "valid_fraction": round(n_valid / n_total, 6) if n_total else None,
+                "min": None if overall_range is None else overall_range[0],
+                "max": None if overall_range is None else overall_range[1],
+                "per_depth": per_depth,
+            }
+        )
+
     def describe(self) -> str:
         """Short human-readable summary, for logs."""
         lines = [

@@ -112,3 +112,50 @@ class ArgoDataUnavailableError(NeerApiError):
 
     status_code = 503
     error_code = "argo_data_unavailable"
+
+
+class ExplainabilityFailedError(NeerApiError):
+    """The explainability computation itself raised (not a missing model
+    or dataset) — e.g. the gradient computation failed for an
+    otherwise-loaded model/input.
+
+    Phase 29B-2, `/explainability`: distinct from `ModelUnavailableError`/
+    `DataUnavailableError`, which mean nothing was there to explain in
+    the first place.
+    """
+
+    status_code = 500
+    error_code = "explainability_failed"
+
+
+class DataQualityFailedError(NeerApiError):
+    """Data-quality computation itself raised for an otherwise-loaded
+    dataset (Phase 29B-2, `/data/quality`) — never a fabricated statistic
+    in its place.
+    """
+
+    status_code = 500
+    error_code = "data_quality_failed"
+
+
+class NetCDFUnavailableError(NeerApiError):
+    """NetCDF output cannot be produced in this environment — `xarray`
+    and/or a NetCDF engine (`netCDF4`/`h5netcdf`) is not installed.
+
+    Phase 29B-2, `/reconstruct/netcdf`: an environment/dependency gap,
+    same "service degraded" meaning as `ModelUnavailableError`/
+    `DataUnavailableError`, not a computation failure.
+    """
+
+    status_code = 503
+    error_code = "netcdf_unavailable"
+
+
+class NetCDFGenerationFailedError(NeerApiError):
+    """NetCDF assembly/writing itself raised for an otherwise-available
+    pipeline (Phase 29B-2, `/reconstruct/netcdf`). Never a fabricated or
+    empty file in its place.
+    """
+
+    status_code = 500
+    error_code = "netcdf_generation_failed"
