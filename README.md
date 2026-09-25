@@ -46,7 +46,12 @@ NEER/
 
 ## Quickstart
 
-### Backend (FastAPI)
+# NEER Backend
+
+Minimal FastAPI backend for **NEER — Neural Embedding based Estimation and Reconstruction**
+(SIH26066, MoES / INCOIS).
+
+## Run locally
 
 ```bash
 cd backend
@@ -54,21 +59,17 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Check it:
+## Endpoints
 
-```bash
-curl http://localhost:8000/health
-```
-
-Expected response:
-
-```json
-{
-  "status": "ok",
-  "project": "NEER",
-  "problem_id": "SIH26066"
-}
-```
+- `GET /health` — liveness check, per-component (data/model) status.
+- `GET /model/info` — architecture, configuration and checkpoint metadata for the loaded model.
+- `GET /dates` — dates actually available in the loaded tensor bundle.
+- `GET /reconstruct` — reconstructed temperature at a single point/date/depth.
+- `GET /profile` — reconstructed temperature profile (all depths) at a point/date.
+- `GET /reconstruct/grid` — reconstructed temperature over a lat/lon region, one date.
+- `GET /embedding` — NEER embedding for a date.
+- `GET /metrics` — real evaluation metrics (RMSE/MAE/bias/Pearson-r/R^2) for a data split.
+- `GET /evaluation/argo` — independent ARGO float validation report (Phase 26 pipeline).
 
 ### Frontend (Next.js)
 

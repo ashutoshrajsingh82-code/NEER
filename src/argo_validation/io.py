@@ -193,7 +193,14 @@ def _read_netcdf_arrays(path: Path) -> Dict[str, np.ndarray]:
                 data = var[:]
                 if np.ma.isMaskedArray(data):
                     data = data.astype(float).filled(np.nan) if data.dtype.kind in "fiu" else data.filled(b" ")
-                out[name] = np.asarray(data)
+                data = np.asarray(data)
+                # netCDF4 only masks fill values it recognises via an explicit
+                # `_FillValue` attribute. ARGO files (and fixtures) that rely
+                # on the implicit 99999.0 sentinel without declaring it need
+                # the same guess-based fallback the scipy.io branch below uses.
+                if data.dtype.kind == "f":
+                    data = np.where(np.isclose(data, _FILL_GUESS), np.nan, data)
+                out[name] = data
             return out
         finally:
             ds.close()

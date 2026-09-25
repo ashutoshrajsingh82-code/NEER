@@ -23,6 +23,7 @@ numpy>=2,<3
 pandas>=2,<4
 xarray>=2024.1
 netCDF4>=1.6
+matplotlib
 
 # PyTorch Dataset layer (src/data/dataset.py, Phase 12)
 #
