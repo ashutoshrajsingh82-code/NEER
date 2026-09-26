@@ -1,0 +1,3 @@
+Reserved for reusable UI components (Phase 31B+). Build them on top of the
+design tokens and utility classes established in this phase:
+tailwind.config.js, app/globals.css, lib/motion.js, lib/icons.js, lib/tokens.js.

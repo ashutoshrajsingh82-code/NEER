@@ -1,0 +1,238 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+ * NEER Design System — Foundation
+ * Dark ocean / scientific control-center visual language.
+ *
+ * CSS custom properties mirror the Tailwind theme tokens (tailwind.config.js)
+ * so raw CSS, inline styles, and SVG/canvas drawing code (charts, maps) can
+ * reference the exact same palette without duplicating hex values.
+ * ------------------------------------------------------------------------ */
+
+@layer base {
+  :root {
+    /* Backgrounds */
+    --color-bg-base: #050b14;
+    --color-bg-deep: #071322;
+    --color-bg: #0a1626;
+    --color-bg-raised: #0e1f33;
+
+    /* Surfaces */
+    --color-surface: #0c1b2e;
+    --color-surface-raised: #112238;
+    --color-surface-overlay: #152a44;
+    --color-surface-sunken: #081420;
+
+    /* Borders */
+    --color-border-subtle: rgba(148, 197, 224, 0.08);
+    --color-border: rgba(148, 197, 224, 0.14);
+    --color-border-strong: rgba(148, 197, 224, 0.24);
+    --color-border-accent: rgba(45, 212, 191, 0.45);
+
+    /* Accent (cyan / teal) */
+    --color-accent: #22d3ee;
+    --color-accent-teal: #2dd4bf;
+    --color-accent-glow: #67e8f9;
+
+    /* Text */
+    --color-text-primary: #e6f1f8;
+    --color-text-secondary: #aec5d6;
+    --color-text-muted: #6b839a;
+    --color-text-disabled: #41576b;
+    --color-text-inverse: #04121d;
+
+    /* Semantic states */
+    --color-success: #34d399;
+    --color-warning: #fbbf24;
+    --color-error: #f87171;
+    --color-info: #38bdf8;
+
+    /* Typography */
+    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "JetBrains Mono", "Fira Code", SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* Radii */
+    --radius-sm: 0.25rem;
+    --radius: 0.5rem;
+    --radius-md: 0.625rem;
+    --radius-lg: 0.875rem;
+    --radius-xl: 1.25rem;
+
+    /* Shadows */
+    --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -8px rgba(0, 0, 0, 0.5);
+    --shadow-glow: 0 0 24px rgba(34, 211, 238, 0.22);
+
+    /* Motion */
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --duration-fast: 120ms;
+    --duration: 200ms;
+    --duration-slow: 320ms;
+  }
+
+  * {
+    @apply border-border-subtle;
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-bg-base text-text-primary font-sans text-body;
+    background-image: var(--tw-bg-ocean, none);
+    min-height: 100vh;
+  }
+
+  h1 {
+    @apply text-h1 text-text-primary;
+  }
+  h2 {
+    @apply text-h2 text-text-primary;
+  }
+  h3 {
+    @apply text-h3 text-text-primary;
+  }
+  p {
+    @apply text-body text-text-secondary;
+  }
+
+  ::selection {
+    background: rgba(45, 212, 191, 0.28);
+    color: var(--color-text-primary);
+  }
+
+  /* Thin, understated scrollbars to match the control-center aesthetic */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 197, 224, 0.16);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 197, 224, 0.28);
+    background-clip: padding-box;
+  }
+}
+
+@layer components {
+  /* Typography hierarchy utility classes -----------------------------------
+   * These compose the `text-display`/`text-caption`/`text-data` font-size
+   * utilities (defined in tailwind.config.js) with sensible default colors,
+   * under distinct class names so Tailwind doesn't see them as circular. */
+  .neer-text-display {
+    @apply text-display text-text-primary;
+  }
+  .neer-text-caption {
+    @apply text-caption text-text-muted uppercase;
+  }
+  .neer-text-data {
+    @apply text-data font-mono text-text-secondary;
+  }
+
+  /* Surface / panel primitives --------------------------------------------- */
+  .neer-panel {
+    @apply bg-surface border border-border rounded-lg shadow-panel;
+  }
+
+  .neer-panel-raised {
+    @apply bg-surface-raised border border-border-strong rounded-lg shadow-raised;
+  }
+
+  /* Frosted / glass panel with a hint of the ocean backdrop showing through */
+  .neer-glass {
+    background: linear-gradient(
+      180deg,
+      rgba(17, 34, 56, 0.72) 0%,
+      rgba(12, 27, 46, 0.72) 100%
+    );
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    @apply border border-border-subtle rounded-lg;
+  }
+
+  /* Subtle scientific grid backdrop for hero / dashboard canvases */
+  .neer-grid-bg {
+    background-color: var(--color-bg-base);
+    background-image: var(--tw-gradient-grid, none), var(--tw-gradient-radial, none);
+  }
+
+  /* Hairline divider */
+  .neer-divider {
+    @apply border-t border-border;
+  }
+
+  /* Cyan glow ring, e.g. for focus states or active instrumentation */
+  .neer-glow-ring {
+    box-shadow: 0 0 0 1px var(--color-border-accent), var(--shadow-glow);
+  }
+
+  /* Status pill/badge base */
+  .neer-badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-caption uppercase tracking-widest border;
+  }
+  .neer-badge-success {
+    @apply neer-badge bg-success-bg border-success-border text-success;
+  }
+  .neer-badge-warning {
+    @apply neer-badge bg-warning-bg border-warning-border text-warning;
+  }
+  .neer-badge-error {
+    @apply neer-badge bg-error-bg border-error-border text-error;
+  }
+  .neer-badge-info {
+    @apply neer-badge bg-info-bg border-info-border text-info;
+  }
+  .neer-badge-accent {
+    @apply neer-badge bg-accent-900/40 border-accent-700 text-accent-300;
+  }
+
+  /* Standard interactive transition — apply alongside hover/active utilities */
+  .neer-transition {
+    transition-property: color, background-color, border-color, box-shadow, transform, opacity;
+    transition-duration: var(--duration);
+    transition-timing-function: var(--ease-out);
+  }
+}
+
+@layer utilities {
+  .bg-ocean-gradient {
+    background-image: linear-gradient(180deg, #071322 0%, #050b14 100%);
+  }
+
+  .bg-grid-pattern {
+    background-image: linear-gradient(rgba(148, 197, 224, 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148, 197, 224, 0.05) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  .bg-radial-glow {
+    background-image: radial-gradient(
+      60% 60% at 50% 0%,
+      rgba(45, 212, 191, 0.12) 0%,
+      rgba(5, 11, 20, 0) 70%
+    );
+  }
+
+  .text-glow {
+    text-shadow: 0 0 18px rgba(34, 211, 238, 0.35);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
