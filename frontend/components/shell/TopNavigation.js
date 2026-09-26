@@ -16,7 +16,7 @@ import { usePathname } from "next/navigation";
 import { ChevronRight, Menu, PanelRight, Waves } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { getActiveNavItem } from "@/lib/navigation";
-import Button from "@/components/ui/primitives/Button";
+import Button from "@/components/ui/primitive/Button";
 import { useShell } from "./ShellContext";
 
 /**

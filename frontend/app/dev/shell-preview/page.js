@@ -3,21 +3,25 @@
 // -----------------------------------------------------------------------------
 // NEER Application Shell — Preview (development only)
 //
-// Phase 32C made Sidebar, InspectionPanel and KPIDrawer responsive internally,
-// so this preview needs no structural changes — resize the window (or use
-// your browser's device toolbar) to see:
+// Phase 32D exercises the fuller InspectionPanel / KPIDrawer APIs — subtitle,
+// header/footer actions, configurable width, controlled open/close, and the
+// KPIDrawer `kpis`/`status`/`actions` convenience props with a resizable
+// expanded panel. All values below are placeholders for visual QA only —
+// not real NEER metrics.
+//
 //   < md   — Sidebar and InspectionPanel are both off-canvas drawers;
 //            KPIDrawer expands as a bottom-sheet overlay with a backdrop.
 //   md–lg  — Sidebar is an inline, collapsed icon rail (tap to expand);
 //            InspectionPanel is still an adaptive drawer, a bit wider now;
-//            KPIDrawer expands inline.
+//            KPIDrawer expands inline, with a drag handle to resize it.
 //   >= lg  — Sidebar is inline, expanded by default.
 //   >= xl  — InspectionPanel also goes inline, alongside the sidebar.
 //
 // Still not one of the real NEER pages — placeholder content only.
 // -----------------------------------------------------------------------------
 
-import { Compass, Gauge, Thermometer, Waves } from "lucide-react";
+import { useState } from "react";
+import { Activity, Compass, Gauge, RefreshCw, Sparkles } from "lucide-react";
 import {
   AppShell,
   InspectionPanel,
@@ -26,9 +30,19 @@ import {
   Sidebar,
   TopNavigation,
 } from "@/components/shell";
-import { Badge, MetricCard, Panel, StatusIndicator } from "@/components/ui";
+import { Badge, Button, Panel, StatusIndicator } from "@/components/ui";
+
+// Mock/placeholder data only — shape mirrors what a real page would someday
+// pass in, but none of these are actual NEER outputs.
+const MOCK_KPIS = [
+  { id: "metric-a", title: "Metric A", value: "0.42", icon: Gauge, description: "Placeholder detail" },
+  { id: "metric-b", title: "Metric B", value: "96.2", unit: "%", icon: Activity, description: "Placeholder detail" },
+  { id: "metric-c", title: "Metric C", value: "High", icon: Sparkles, description: "Placeholder detail" },
+];
 
 export default function ShellPreview() {
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+
   if (process.env.NODE_ENV === "production") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg-base px-6 text-center">
@@ -39,57 +53,63 @@ export default function ShellPreview() {
 
   return (
     <AppShell
-      navigation={<TopNavigation title="NEER" status={<StatusIndicator status="online" label="Model live" />} />}
+      navigation={<TopNavigation title="NEER" status={<StatusIndicator status="online" label="System nominal" />} />}
       sidebar={<Sidebar />}
       inspectionPanel={
-        <InspectionPanel title="Inspector">
+        <InspectionPanel
+          title="Inspector"
+          subtitle="Placeholder selection"
+          width={360}
+          open={inspectorOpen}
+          onClose={() => setInspectorOpen(false)}
+          headerActions={<Button variant="ghost" size="sm" iconOnly icon={RefreshCw} aria-label="Refresh selection" />}
+          footerActions={
+            <>
+              <Button variant="secondary" size="sm">
+                Dismiss
+              </Button>
+              <Button variant="primary" size="sm">
+                Apply
+              </Button>
+            </>
+          }
+        >
           <div className="flex flex-col gap-4">
-            <Panel title="Selected point" icon={Compass} emphasis="raised">
+            <Panel title="Placeholder selection" icon={Compass} emphasis="raised">
               <p className="text-small text-text-secondary">
-                Placeholder content — a page will render real point details here.
+                A page will render its own selection details here — a grid cell, a reconstruction
+                result, model output, metadata, and so on. This panel only owns the surrounding chrome.
               </p>
             </Panel>
-            <MetricCard
-              title="Sea Surface Temp"
-              value="28.4"
-              unit="°C"
-              icon={Thermometer}
-              status="online"
-              description="Placeholder metric"
-            />
+            <Badge variant="info">Example content</Badge>
           </div>
         </InspectionPanel>
       }
       kpiDrawer={
         <KPIDrawer
-          summary={
-            <>
-              <span className="text-caption text-text-muted">RMSE</span>
-              <span className="text-small font-mono text-text-primary">0.142</span>
-              <span className="mx-2 h-4 w-px bg-border" aria-hidden="true" />
-              <span className="text-caption text-text-muted">Coverage</span>
-              <span className="text-small font-mono text-text-primary">96.2%</span>
-              <span className="mx-2 h-4 w-px bg-border" aria-hidden="true" />
-              <Badge variant="accent">Model v3</Badge>
-            </>
-          }
-        >
-          <div className="grid gap-4 sm:grid-cols-3">
-            <MetricCard title="RMSE" value="0.142" icon={Gauge} description="Placeholder detail" />
-            <MetricCard title="Coverage" value="96.2" unit="%" icon={Waves} description="Placeholder detail" />
-            <MetricCard title="Confidence" value="High" icon={Waves} description="Placeholder detail" />
-          </div>
-        </KPIDrawer>
+          title="Key Indicators"
+          status={{ status: "online", label: "Feed live" }}
+          kpis={MOCK_KPIS}
+          actions={<Button variant="ghost" size="sm" icon={RefreshCw}>Refresh</Button>}
+        />
       }
     >
       <MainContent>
         <div className="mx-auto flex max-w-4xl flex-col gap-4">
           <h1 className="text-h2 text-text-primary">Responsive shell preview</h1>
           <p className="text-body text-text-muted">
-            Resize the window (or open dev tools' device toolbar) to test each breakpoint. Try expanding
-            the KPI drawer at the bottom below and above the tablet width — on mobile it becomes a
-            draggable-looking bottom sheet with a backdrop; on tablet/desktop it expands inline instead.
+            Resize the window (or open dev tools&apos; device toolbar) to test each breakpoint. Expand
+            the KPI drawer at the bottom and drag its grip handle to resize it on tablet/desktop; on
+            mobile it becomes a bottom sheet instead. Above the {"\u201Cxl\u201D"} breakpoint, use the button
+            below to toggle the inspection panel closed and open again.
           </p>
+          {!inspectorOpen && (
+            <div>
+              <Button variant="secondary" size="sm" onClick={() => setInspectorOpen(true)}>
+                Reopen inspection panel
+              </Button>
+            </div>
+          )}
           {Array.from({ length: 8 }).map((_, index) => (
             <Panel key={index} title={`Placeholder section ${index + 1}`}>
               <p className="text-small text-text-secondary">

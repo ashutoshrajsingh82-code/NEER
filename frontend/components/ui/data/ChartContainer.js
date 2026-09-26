@@ -15,7 +15,7 @@ import { BarChart3, Maximize2, Minimize2 } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/cn";
 import { scaleIn } from "@/lib/motion";
-import Button from "../primitives/Button";
+import Button from "../primitive/Button";
 import LoadingSkeleton from "./LoadingSkeleton";
 
 /**

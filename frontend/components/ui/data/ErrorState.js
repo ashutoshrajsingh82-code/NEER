@@ -12,7 +12,7 @@ import { motion } from "framer-motion";
 import { AlertTriangle, RotateCw } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { fade } from "@/lib/motion";
-import Button from "../primitives/Button";
+import Button from "../primitive/Button";
 
 /**
  * @param {string} title

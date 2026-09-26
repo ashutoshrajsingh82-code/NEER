@@ -20,8 +20,8 @@ import { cn } from "@/lib/cn";
 import { DURATION, EASE_OUT } from "@/lib/motion";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { NAV_ITEMS } from "@/lib/navigation";
-import Drawer from "@/components/ui/overlays/Drawer";
-import Button from "@/components/ui/primitives/Button";
+import Drawer from "@/components/ui/layout/Drawer";
+import Button from "@/components/ui/primitive/Button";
 import SidebarItem from "./SidebarItem";
 import { useShell } from "./ShellContext";
 

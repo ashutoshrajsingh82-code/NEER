@@ -13,7 +13,7 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { fade, DURATION, EASE_OUT } from "@/lib/motion";
 import { useDialog } from "@/lib/useDialog";
-import Button from "../primitives/Button";
+import Button from "../primitive/Button";
 
 const POSITION_CONFIG = {
   right: { side: "right-0 top-0 h-full", edge: "border-l", size: "w-full max-w-sm", axis: "x", offset: 32 },
@@ -37,12 +37,29 @@ function buildSlideVariants(config) {
  * @param {() => void} onClose
  * @param {"left"|"right"|"top"|"bottom"} position
  * @param {string} title
+ * @param {string} subtitle - optional line rendered under the title
+ * @param {React.ReactNode} headerActions - optional controls rendered before the close button
+ * @param {boolean} showClose - set false to omit the built-in close button (e.g. a caller renders its own)
+ * @param {React.ReactNode} footer - optional content pinned below the scrollable body
  * @param {React.ReactNode} children
  */
-export default function Drawer({ open, onClose, position = "right", title, children, className }) {
+export default function Drawer({
+  open,
+  onClose,
+  position = "right",
+  title,
+  subtitle,
+  headerActions,
+  showClose = true,
+  footer,
+  children,
+  className,
+  bodyClassName,
+}) {
   const containerRef = useDialog({ open, onClose });
   const config = POSITION_CONFIG[position] ?? POSITION_CONFIG.right;
   const variants = buildSlideVariants(config);
+  const hasHeader = Boolean(title || subtitle || headerActions || showClose);
 
   if (typeof document === "undefined") return null;
 
@@ -78,18 +95,30 @@ export default function Drawer({ open, onClose, position = "right", title, child
               className
             )}
           >
-            <header className="neer-divider flex items-center justify-between gap-4 px-5 py-4">
-              {title ? (
-                <h3 id="neer-drawer-title" className="text-h3 text-text-primary">
-                  {title}
-                </h3>
-              ) : (
-                <span />
-              )}
-              <Button variant="ghost" size="sm" iconOnly icon={X} aria-label="Close" onClick={onClose} />
-            </header>
+            {hasHeader && (
+              <header className="neer-divider flex shrink-0 items-start justify-between gap-4 px-5 py-4">
+                <div className="min-w-0">
+                  {title ? (
+                    <h3 id="neer-drawer-title" className="truncate text-h3 text-text-primary">
+                      {title}
+                    </h3>
+                  ) : (
+                    <span />
+                  )}
+                  {subtitle && <p className="mt-0.5 truncate text-small text-text-muted">{subtitle}</p>}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {headerActions}
+                  {showClose && (
+                    <Button variant="ghost" size="sm" iconOnly icon={X} aria-label="Close" onClick={onClose} />
+                  )}
+                </div>
+              </header>
+            )}
 
-            <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
+            <div className={cn("flex-1 overflow-y-auto px-5 py-4", bodyClassName)}>{children}</div>
+
+            {footer && <div className="neer-divider shrink-0 bg-surface-sunken/40 px-5 py-3">{footer}</div>}
           </motion.div>
         </div>
       )}

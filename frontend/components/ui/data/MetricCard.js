@@ -10,7 +10,7 @@
 
 import { Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/cn";
-import StatusIndicator from "../primitives/StatusIndicator";
+import StatusIndicator from "../primitive/StatusIndicator";
 
 const TREND_ICONS = {
   up: TrendingUp,

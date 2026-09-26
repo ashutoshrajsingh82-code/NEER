@@ -14,7 +14,7 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { fade, scaleIn } from "@/lib/motion";
 import { useDialog } from "@/lib/useDialog";
-import Button from "../primitives/Button";
+import Button from "../primitive/Button";
 
 const SIZE_CLASSES = {
   sm: "max-w-sm",
