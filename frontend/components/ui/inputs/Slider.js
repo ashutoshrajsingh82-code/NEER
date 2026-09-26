@@ -61,6 +61,7 @@ export default function Slider({
         step={step}
         value={value}
         disabled={disabled}
+        aria-valuetext={display}
         onChange={(event) => onChange?.(Number(event.target.value))}
         style={{
           backgroundImage: `linear-gradient(90deg, var(--color-accent) ${percent}%, rgba(148,197,224,0.14) ${percent}%)`,

@@ -10,7 +10,7 @@
 
 import { Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/cn";
-import StatusIndicator from "./StatusIndicator";
+import StatusIndicator from "../primitives/StatusIndicator";
 
 const TREND_ICONS = {
   up: TrendingUp,
@@ -70,8 +70,11 @@ export default function MetricCard({
         {status && <StatusIndicator status={status} showLabel={false} size="sm" />}
       </div>
 
+      {/* QA (Phase 31E): was `text-data-lg`, which isn't a defined Tailwind
+          size in tailwind.config.js and silently rendered unstyled. Uses the
+          existing `h3` scale (tokenized) instead of introducing a new one. */}
       <div className="flex items-baseline gap-1.5">
-        <span className="text-data-lg font-mono text-text-primary">{value}</span>
+        <span className="text-h3 font-mono font-semibold text-text-primary">{value}</span>
         {unit && <span className="text-small text-text-muted">{unit}</span>}
       </div>
 

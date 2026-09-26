@@ -6,6 +6,12 @@
 // Horizontal tab list. Controlled component — the caller owns `value` and
 // renders whichever panel corresponds to it; Tabs only handles the tab strip
 // itself, so it stays independent of any specific page's content.
+//
+// QA (Phase 31E): added an optional `id` prop. Without it, Tabs generated a
+// random id per render via useId(), so a caller had no reliable way to build
+// a matching `id="<prefix>-panel-<value>"` for its <div role="tabpanel">.
+// Passing `id="reconstruction-tabs"` (for example) makes that contract
+// explicit and stable across re-renders.
 // -----------------------------------------------------------------------------
 
 import { useId, useRef } from "react";
@@ -17,9 +23,12 @@ import { DURATION, EASE_OUT } from "@/lib/motion";
  * @param {{value: string, label: string, icon?: React.ComponentType, disabled?: boolean}[]} items
  * @param {string} value - the currently active tab's value
  * @param {(value: string) => void} onChange
+ * @param {string} [id] - stable id prefix; auto-generated if omitted.
+ *   Tab button ids: `${id}-tab-${value}`, expected panel ids: `${id}-panel-${value}`
  */
-export default function Tabs({ items, value, onChange, className }) {
-  const groupId = useId();
+export default function Tabs({ items, value, onChange, id, className }) {
+  const autoId = useId();
+  const groupId = id ?? autoId;
   const tabRefs = useRef({});
 
   function focusAndSelect(targetIndex) {

@@ -12,9 +12,10 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { BarChart3, Maximize2, Minimize2 } from "lucide-react";
+import { useEffect } from "react";
 import { cn } from "@/lib/cn";
 import { scaleIn } from "@/lib/motion";
-import Button from "./Button";
+import Button from "../primitives/Button";
 import LoadingSkeleton from "./LoadingSkeleton";
 
 /**
@@ -42,6 +43,17 @@ export default function ChartContainer({
 }) {
   const [fullscreen, setFullscreen] = useState(false);
 
+  // QA (Phase 31E): fullscreen now closes on Escape, matching Modal/Drawer
+  // behavior instead of only being dismissible via the toggle button/backdrop.
+  useEffect(() => {
+    if (!fullscreen) return undefined;
+    function handleKeyDown(event) {
+      if (event.key === "Escape") setFullscreen(false);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [fullscreen]);
+
   const body = loading ? (
     <LoadingSkeleton variant="chart" />
   ) : empty ? (
@@ -55,6 +67,8 @@ export default function ChartContainer({
 
   const content = (
     <div
+      role="region"
+      aria-label={title || "Chart"}
       className={cn(
         "neer-panel flex flex-col",
         fullscreen ? "fixed inset-4 z-modal shadow-panel" : "relative",

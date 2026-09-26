@@ -24,9 +24,10 @@ const VARIANT_CLASSES = {
   ghost:
     "bg-transparent text-text-secondary border border-transparent " +
     "hover:bg-surface-raised hover:text-text-primary active:bg-surface",
-  danger:
-    "bg-error text-text-inverse border border-transparent shadow-[0_0_12px_rgba(248,113,113,0.25)] " +
-    "hover:bg-error/90 active:bg-error/80",
+  // QA (Phase 31E): no custom glow here — glow is reserved for the primary
+  // accent action per the "minimal glow" visual spec; danger relies on
+  // color/contrast alone, which also reads calmer for a scientific app.
+  danger: "bg-error text-text-inverse border border-transparent hover:bg-error/90 active:bg-error/80",
 };
 
 const SIZE_CLASSES = {

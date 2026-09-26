@@ -13,7 +13,7 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { fade, DURATION, EASE_OUT } from "@/lib/motion";
 import { useDialog } from "@/lib/useDialog";
-import Button from "./Button";
+import Button from "../primitives/Button";
 
 const POSITION_CONFIG = {
   right: { side: "right-0 top-0 h-full", edge: "border-l", size: "w-full max-w-sm", axis: "x", offset: 32 },

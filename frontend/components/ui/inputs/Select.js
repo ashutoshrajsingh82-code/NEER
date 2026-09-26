@@ -132,6 +132,7 @@ export default function Select({
             role="listbox"
             id={listboxId}
             tabIndex={-1}
+            aria-activedescendant={activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined}
             initial="hidden"
             animate="visible"
             exit="exit"
@@ -144,6 +145,7 @@ export default function Select({
               return (
                 <li
                   key={option.value}
+                  id={`${listboxId}-option-${index}`}
                   role="option"
                   aria-selected={isSelected}
                   onMouseEnter={() => setActiveIndex(index)}
