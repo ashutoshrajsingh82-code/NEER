@@ -85,6 +85,8 @@ function subtractGrids(a, b) {
  *   isError: boolean,
  *   error: import("@/lib/api").ApiError|null,
  *   values: (number[][]|number[][][])|null,
+ *   temperatureValues: (number[][]|number[][][])|null,
+ *   anomalyValues: (number[][]|number[][][])|null,
  *   grid: {lat: number[], lon: number[], depth: number|null, depths: number[]|null}|null,
  *   estimatedCells: number,
  *   tooLargeForCellLimit: boolean,
@@ -141,6 +143,23 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
     return null;
   }, [data, support]);
 
+  // Phase 35C-B: the hover tooltip (OceanMap.js) shows temperature *and*
+  // anomaly together, regardless of which single variable tab is active —
+  // both read from this one already-fetched response (never a second
+  // request) whenever it actually contains them, same "never invent a
+  // scientific value" rule `values` above already follows: anomaly stays
+  // `null` here exactly when it would have above (no `climatology` for
+  // this date), rather than silently falling back to something else.
+  const temperatureValues = useMemo(() => {
+    if (!data || !support.supported) return null;
+    return data.temperature ?? null;
+  }, [data, support]);
+
+  const anomalyValues = useMemo(() => {
+    if (!data || !support.supported) return null;
+    return data.climatology ? subtractGrids(data.temperature, data.climatology) : null;
+  }, [data, support]);
+
   const grid = data ? { lat: data.lat, lon: data.lon, depth: data.depth, depths: data.depths } : null;
 
   // Re-issues the same request after a failure (e.g. a transient network
@@ -164,6 +183,8 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
     isError,
     error,
     values,
+    temperatureValues,
+    anomalyValues,
     grid,
     estimatedCells,
     tooLargeForCellLimit,

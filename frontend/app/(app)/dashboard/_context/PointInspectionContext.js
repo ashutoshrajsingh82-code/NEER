@@ -55,6 +55,8 @@
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import { reconstruct } from "@/lib/api";
 import { useApiRequest } from "@/lib/useApiRequest";
+import { POINT_STATUS, classifyPointLocation, isQueryablePoint } from "@/lib/pointClassification";
+import { isOnLand } from "@/components/ocean-map/landmask";
 
 const PointInspectionContext = createContext(null);
 

@@ -79,6 +79,7 @@ import {
 } from "lucide-react";
 import { Badge, Button, ErrorState, LoadingSkeleton, Panel, StatusIndicator, Tabs, Tooltip } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { formatSigned } from "@/lib/format";
 import {
   VARIABLE_COLOR_CONFIG,
   computeFiniteExtent,
@@ -95,6 +96,7 @@ import {
   round2,
   snapToGrid,
 } from "@/lib/oceanDomain";
+import { POINT_STATUS, classifyPointLocation, describePointStatus } from "@/lib/pointClassification";
 import GridOverlay from "./GridOverlay";
 import { LANDMASSES, VIEW_BOX, isOnLand, project, unproject } from "./landmask";
 import TemperatureLayer from "./TemperatureLayer";
@@ -262,6 +264,13 @@ export default function OceanMap({
   const [internalSelected, setInternalSelected] = useState(null);
   const [transform, setTransform] = useState({ scale: 1, x: 0, y: 0 });
   const [hover, setHover] = useState(null); // {lat, lon} in world space, or null
+  // Container-relative pixel position of the same hover, purely so the
+  // Phase 35C-B floating scientific tooltip can sit next to the cursor —
+  // kept separate from `hover` (world lat/lon) because the tooltip's CSS
+  // `left`/`top` need real pixels, not viewBox units, and re-deriving pixels
+  // from `hover` would have to re-invert the same letterboxing math
+  // `clientToViewBox` already did for this exact event.
+  const [hoverScreenPos, setHoverScreenPos] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [layerVisibility, setLayerVisibility] = useState({
@@ -368,6 +377,7 @@ export default function OceanMap({
     const worldX = (raw.x - transform.x) / transform.scale;
     const worldY = (raw.y - transform.y) / transform.scale;
     setHover(unproject(worldX, worldY));
+    setHoverScreenPos({ x: event.clientX - rect.left, y: event.clientY - rect.top });
   }
 
   function handlePointerUp(event) {
@@ -488,8 +498,21 @@ export default function OceanMap({
   const showEmptyFieldState =
     layer.supported && Boolean(date) && layer.status === "success" && !layer.isLoading && !layer.values;
 
-  const hoverOnLand = hover ? isOnLand(hover.lat, hover.lon) : false;
-  const selectedOnLand = activeSelected ? isOnLand(activeSelected.lat, activeSelected.lon) : false;
+  // Single source of truth for "is this point ocean, land, or outside the
+  // NEER domain" (lib/pointClassification.js) — used for the hover tooltip,
+  // the click/selection badge, and (crucially, in
+  // PointInspectionContext.js) whether a click is even allowed to reach
+  // GET /reconstruct. `hoverInDomain` keeps its own small ±2° grace margin
+  // for the *crosshair marker's* visibility only (a purely cosmetic "don't
+  // pop the crosshair in/out right at the domain edge" concern) — it is
+  // never used to decide what data to show or fetch, which is why it stays
+  // separate from the strict classification below.
+  const hoverStatus = hover ? classifyPointLocation(hover.lat, hover.lon, isOnLand) : null;
+  const selectedStatus = activeSelected
+    ? classifyPointLocation(activeSelected.lat, activeSelected.lon, isOnLand)
+    : null;
+  const hoverOnLand = hoverStatus === POINT_STATUS.LAND;
+  const selectedOnLand = selectedStatus === POINT_STATUS.LAND;
   const hoverInDomain =
     hover &&
     hover.lat >= OCEAN_DOMAIN.latMin - 2 &&
@@ -500,9 +523,28 @@ export default function OceanMap({
   const readoutLat = hover ? formatLat(hover.lat) : activeSelected ? formatLat(activeSelected.lat) : "--.--°";
   const readoutLon = hover ? formatLon(hover.lon) : activeSelected ? formatLon(activeSelected.lon) : "--.--°";
   const readoutPoint = hover ?? activeSelected ?? null;
+  const readoutStatus = hover ? hoverStatus : selectedStatus;
   const readoutValue = lookupFieldValue(layer.grid, layer.values, readoutPoint);
   const readoutValueText =
-    readoutValue === null ? "--" : `${readoutValue.toFixed(2)}${colorConfig?.unit ?? ""}`;
+    readoutStatus && readoutStatus !== POINT_STATUS.OCEAN
+      ? "N/A"
+      : readoutValue === null
+        ? "--"
+        : `${readoutValue.toFixed(2)}${colorConfig?.unit ?? ""}`;
+
+  // Hover tooltip's temperature/anomaly — read from the same already-loaded
+  // grid the colored field/legend draw from (never a separate fetch, never
+  // invented), looked up by nearest cell exactly like `readoutValue` above.
+  // Unlike `readoutValue` (whichever single field the active tab is
+  // showing), the tooltip always tries both, since Requirement 1's tooltip
+  // spec asks for "temperature" and "anomaly where available" together —
+  // see useOceanMapLayer.js's `temperatureValues`/`anomalyValues` for why
+  // both are derivable from one fetched response regardless of which tab
+  // (sst/anomaly) is active.
+  const hoverTemperature =
+    hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(layer.grid, layer.temperatureValues, hover) : null;
+  const hoverAnomaly =
+    hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(layer.grid, layer.anomalyValues, hover) : null;
 
   return (
     <Panel
@@ -566,7 +608,10 @@ export default function OceanMap({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerLeave={() => setHover(null)}
+        onPointerLeave={() => {
+          setHover(null);
+          setHoverScreenPos(null);
+        }}
         onDoubleClick={handleDoubleClick}
         onKeyDown={handleKeyDown}
         className={cn(
@@ -809,6 +854,88 @@ export default function OceanMap({
           </div>
         )}
 
+        {/* Compact scientific hover tooltip (Phase 35C-B, Requirement 1).
+            Reuses the same visual tokens as the shared Tooltip component
+            (border-border-strong/bg-surface-overlay/shadow-raised/
+            text-caption) rather than wrapping Tooltip itself: Tooltip's
+            hover-a-fixed-child, fixed-position API doesn't fit a value that
+            already tracks a moving SVG cursor across arbitrary lat/lon —
+            same reasoning as the loading/error pills just above, which are
+            also inline markup in that same visual language rather than a
+            second Tooltip instance. Positioned from `hoverScreenPos`
+            (container-relative pixels), flipped to whichever side of the
+            cursor keeps it inside the map surface, so it never obstructs
+            the point currently being read (Requirement 1's "avoid
+            obstructing important map content"). Land/outside-domain never
+            show a temperature/anomaly number — only `describePointStatus`'s
+            wording — so this can never look like a fabricated ocean
+            reading (Requirement 5 / scientific-integrity). */}
+        {hover && hoverScreenPos && (
+          <div
+            className="pointer-events-none absolute z-toast flex w-56 flex-col gap-1.5 rounded-md border border-border-strong bg-surface-overlay px-3 py-2 text-caption text-text-primary shadow-raised"
+            style={{
+              left: hoverScreenPos.x,
+              top: hoverScreenPos.y,
+              transform: `translate(${
+                containerRef.current && hoverScreenPos.x > containerRef.current.clientWidth / 2
+                  ? "calc(-100% - 14px)"
+                  : "14px"
+              }, ${
+                containerRef.current && hoverScreenPos.y > containerRef.current.clientHeight / 2
+                  ? "calc(-100% - 14px)"
+                  : "14px"
+              })`,
+            }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-small font-semibold text-text-primary">
+                {formatLat(hover.lat)}, {formatLon(hover.lon)}
+              </span>
+              <StatusIndicator
+                status={
+                  hoverStatus === POINT_STATUS.OCEAN
+                    ? "online"
+                    : hoverStatus === POINT_STATUS.LAND
+                      ? "offline"
+                      : "warning"
+                }
+                showLabel={false}
+                size="sm"
+              />
+            </div>
+
+            {hoverStatus !== POINT_STATUS.OCEAN ? (
+              <p className="text-text-muted">{describePointStatus(hoverStatus)}</p>
+            ) : (
+              <>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-text-muted">Temperature</span>
+                  <span className="font-mono text-text-primary">
+                    {hoverTemperature === null ? "-- (no data)" : `${hoverTemperature.toFixed(2)}°C`}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-text-muted">Anomaly</span>
+                  <span className="font-mono text-text-primary">
+                    {hoverAnomaly === null ? "-- (no data)" : `${formatSigned(hoverAnomaly)}°C`}
+                  </span>
+                </div>
+              </>
+            )}
+
+            <div className="flex items-center justify-between gap-3 border-t border-border-subtle pt-1 text-text-muted">
+              <span className="flex items-center gap-1">
+                <CalendarDays size={10} strokeWidth={1.75} aria-hidden="true" />
+                {activeDate ? activeDate.toLocaleDateString("en-GB", DATE_FORMAT) : "No date selected"}
+              </span>
+              <span className="flex items-center gap-1">
+                <MoveVertical size={10} strokeWidth={1.75} aria-hidden="true" />
+                {formatDepth(depth)}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Legend */}
         <div className="absolute bottom-3 left-3 flex flex-col gap-2 rounded-md border border-border bg-surface-base/90 px-3 py-2 backdrop-blur-sm">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-text-muted">
@@ -854,14 +981,23 @@ export default function OceanMap({
         <span>LON {readoutLon}</span>
         <span>DEPTH {depth} m</span>
         <span>VALUE {readoutValueText}</span>
-        {(hover || activeSelected) && (
-          <Badge variant={(hover ? hoverOnLand : selectedOnLand) ? "neutral" : "accent"} size="sm">
-            {(hover ? hoverOnLand : selectedOnLand) ? (
-              <span className="flex items-center gap-1">
-                <Compass size={10} strokeWidth={2} aria-hidden="true" /> Land — outside reconstruction domain
-              </span>
-            ) : (
+        {(hover || activeSelected) && readoutStatus && (
+          <Badge
+            variant={
+              readoutStatus === POINT_STATUS.OCEAN
+                ? "accent"
+                : readoutStatus === POINT_STATUS.OUTSIDE_DOMAIN
+                  ? "warning"
+                  : "neutral"
+            }
+            size="sm"
+          >
+            {readoutStatus === POINT_STATUS.OCEAN ? (
               "Ocean grid cell"
+            ) : (
+              <span className="flex items-center gap-1">
+                <Compass size={10} strokeWidth={2} aria-hidden="true" /> {describePointStatus(readoutStatus)}
+              </span>
             )}
           </Badge>
         )}
