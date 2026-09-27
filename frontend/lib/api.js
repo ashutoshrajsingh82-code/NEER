@@ -28,9 +28,19 @@
 // routers and Pydantic schemas — backend/app/routers/{health,model_info,
 // dates,reconstruct,profile}.py and backend/app/schemas.py — rather than
 // assumed, so every parameter name, type, and requiredness below matches
-// what the backend actually accepts today. No other backend routes
-// (embedding, metrics, evaluation, explainability, data_quality,
-// reconstruct_netcdf) are wrapped yet; those belong to later phases.
+// what the backend actually accepts today.
+//
+// Phase 33C adds the remaining "scientific" endpoints — embedding, metrics,
+// argoEvaluation, explainability, dataQuality, netcdfExport — read the same
+// way, straight off backend/app/routers/{embedding,metrics,evaluation,
+// explainability,data_quality,reconstruct_netcdf}.py and their
+// EmbeddingQueryParams/MetricsQueryParams/ArgoEvaluationQueryParams/
+// ExplainabilityQueryParams/GridQueryParams schemas. `/reconstruct/netcdf`
+// is the one endpoint in this module that doesn't return JSON (it's a
+// `FileResponse`), so `apiRequest` grows a `responseType: "blob"` mode
+// (still the single fetch/error-handling path — see Requirement 7) rather
+// than that endpoint reaching for its own fetch call. Every NEER backend
+// route now has a wrapper here.
 // -----------------------------------------------------------------------------
 
 /**
@@ -158,6 +168,31 @@ async function parseBody(response) {
 }
 
 /**
+ * Pulls a filename out of a `Content-Disposition: attachment; filename="...";
+ * filename*=UTF-8''...` header (Requirement: export parameters / correctly
+ * handle what the backend sends). Prefers the RFC 5987 `filename*` form
+ * (percent-decoded) when present, since that's the one that survives
+ * non-ASCII names; falls back to the plain `filename=` form; returns `null`
+ * if the header is missing or unparseable, letting the caller fall back to
+ * its own default rather than throwing over a cosmetic detail.
+ * @param {string|null} headerValue
+ * @returns {string|null}
+ */
+function filenameFromContentDisposition(headerValue) {
+  if (!headerValue) return null;
+  const starMatch = /filename\*\s*=\s*[^']*''([^;]+)/i.exec(headerValue);
+  if (starMatch) {
+    try {
+      return decodeURIComponent(starMatch[1].trim());
+    } catch {
+      // fall through to the plain form below
+    }
+  }
+  const plainMatch = /filename\s*=\s*"?([^";]+)"?/i.exec(headerValue);
+  return plainMatch ? plainMatch[1].trim() : null;
+}
+
+/**
  * Turns a non-ok HTTP response into an ApiError, preferring the backend's
  * own `{ error, detail, ...extra }` shape (backend/app/errors.py) when
  * present, so components can branch on the exact same error_code the
@@ -221,13 +256,23 @@ function errorFromResponse(response, body) {
  * @param {number|null} [options.timeoutMs] - aborts the request after this
  *   many ms when no `signal` was supplied (default DEFAULT_TIMEOUT_MS);
  *   pass `null` to disable
- * @returns {Promise<*>} the parsed JSON body, or `null` for an empty body
+ * @param {"json"|"blob"} [options.responseType="json"] - "json" parses the
+ *   body as JSON (the default, right for every endpoint except the NetCDF
+ *   export); "blob" is for binary downloads (e.g. `/reconstruct/netcdf`) —
+ *   on success the raw bytes are returned as a `Blob` alongside the
+ *   filename from `Content-Disposition`, without ever running them through
+ *   `JSON.parse`. A non-ok response is still parsed as JSON either way,
+ *   since the backend's error bodies (`backend/app/errors.py`) are always
+ *   JSON regardless of what the successful response would have been.
+ * @returns {Promise<*>} the parsed JSON body (or `null` for an empty body)
+ *   when `responseType` is "json"; `{ blob, filename, contentType }` when
+ *   it's "blob"
  * @throws {ApiError} always — every failure mode (config, network, timeout,
  *   abort, malformed body, HTTP error) is normalized before it reaches the caller
  */
 export async function apiRequest(
   path,
-  { method = "GET", params, body, headers, signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}
+  { method = "GET", params, body, headers, signal, timeoutMs = DEFAULT_TIMEOUT_MS, responseType = "json" } = {}
 ) {
   const url = withQuery(joinUrl(getBaseUrl(), path), params);
 
@@ -273,6 +318,43 @@ export async function apiRequest(
     if (timer) clearTimeout(timer);
   }
 
+  // The backend's error bodies are always JSON (backend/app/errors.py),
+  // no matter what a *successful* response for this endpoint would have
+  // been — so a non-ok response is always read as JSON, even in "blob" mode.
+  if (!response.ok) {
+    let parsedBody;
+    try {
+      parsedBody = await parseBody(response);
+    } catch (parseError) {
+      throw new ApiError({
+        code: API_ERROR_CODES.INVALID_RESPONSE,
+        message: "The server returned a response that could not be parsed as JSON.",
+        status: response.status,
+        details: { rawText: parseError.rawText },
+      });
+    }
+    throw errorFromResponse(response, parsedBody);
+  }
+
+  if (responseType === "blob") {
+    let blob;
+    try {
+      blob = await response.blob();
+    } catch (cause) {
+      throw new ApiError({
+        code: API_ERROR_CODES.INVALID_RESPONSE,
+        message: "The server's response body could not be read.",
+        status: response.status,
+        details: { cause: cause?.message ?? String(cause) },
+      });
+    }
+    return {
+      blob,
+      filename: filenameFromContentDisposition(response.headers.get("content-disposition")),
+      contentType: response.headers.get("content-type") || blob.type || null,
+    };
+  }
+
   let parsedBody;
   try {
     parsedBody = await parseBody(response);
@@ -283,10 +365,6 @@ export async function apiRequest(
       status: response.status,
       details: { rawText: parseError.rawText },
     });
-  }
-
-  if (!response.ok) {
-    throw errorFromResponse(response, parsedBody);
   }
 
   return parsedBody;
@@ -461,4 +539,184 @@ export function reconstructGrid({ latMin, latMax, lonMin, lonMax, date, depth } 
  */
 export function profile({ lat, lon, date } = {}, options = {}) {
   return get("/profile", { lat, lon, date: toDateParam(date) }, options);
+}
+
+// -----------------------------------------------------------------------------
+// Scientific NEER endpoints  (Phase 33C)
+//
+// Same conventions as Phase 33B above: each function is a thin wrapper over
+// `get()`, a query-parameter object in, the backend's already-parsed JSON
+// body out (or, for `netcdfExport`, a `{ blob, filename, contentType }` out
+// of `apiRequest`'s "blob" mode), every failure normalized to `ApiError`.
+// Written against backend/app/routers/{embedding,metrics,evaluation,
+// explainability,data_quality,reconstruct_netcdf}.py and the
+// EmbeddingQueryParams/MetricsQueryParams/ArgoEvaluationQueryParams/
+// ExplainabilityQueryParams/GridQueryParams schemas in backend/app/schemas.py.
+// -----------------------------------------------------------------------------
+
+/**
+ * GET /embedding (backend/app/routers/embedding.py) — the pooled encoder
+ * embedding for one date's real input sample (the same vector every
+ * `predict_*` call for that date reads off its cached forward pass — never
+ * a randomly generated or placeholder vector). `date` is the backend's only
+ * parameter (`EmbeddingQueryParams`), and it's required.
+ *
+ * @param {object} params
+ * @param {string|Date} params.date - "YYYY-MM-DD", or a Date (formatted in UTC)
+ * @param {object} [options]
+ * @returns {Promise<{date: string, embedding: number[], dim: number,
+ *   data_mode: string, cache_hit: boolean, latency_ms: number}>}
+ * @throws {ApiError} "date_not_found" (404), "model_unavailable"/
+ *   "data_unavailable" (503), "inference_failed" (500), or
+ *   "validation_error" (422) for a missing/malformed `date`
+ */
+export function embedding({ date } = {}, options = {}) {
+  return get("/embedding", { date: toDateParam(date) }, options);
+}
+
+/**
+ * GET /metrics (backend/app/routers/metrics.py) — real evaluation metrics
+ * (RMSE/MAE/bias/Pearson-r/R^2, overall + per-depth [+ per-variable]) for
+ * one data split, scored by running the loaded checkpoint over that split's
+ * real input grid against its real held-out targets — never a fabricated
+ * or placeholder value. `split` is the backend's only parameter
+ * (`MetricsQueryParams`) and is optional; the backend itself defaults it
+ * to `"test"` when omitted, so this wrapper only sends it when provided
+ * rather than hard-coding that default a second time here.
+ *
+ * @param {object} [params]
+ * @param {string} [params.split] - which data split to score: "train", "val", or "test"
+ * @param {object} [options]
+ * @returns {Promise<{phase: number, split: string, n_samples: number,
+ *   is_synthetic: boolean, data_mode: string, disclaimer: string|null,
+ *   source_tensors_path: string, checkpoint: string|null,
+ *   metrics: {overall: object, per_depth: Object<string, object>,
+ *   per_variable: Object<string, object>}}>}
+ * @throws {ApiError} "invalid_parameter" (400) — unrecognized `split`;
+ *   "model_unavailable"/"data_unavailable" (503) — no model, dataset, or
+ *   targets for that split; "metrics_failed" (500)
+ */
+export function metrics({ split } = {}, options = {}) {
+  return get("/metrics", { split }, options);
+}
+
+/**
+ * GET /evaluation/argo (backend/app/routers/evaluation.py) — runs the real
+ * ARGO validation pipeline (`src.argo_validation.run_argo_validation`)
+ * against the loaded checkpoint and whatever ARGO source data is configured
+ * under `data/raw`, and returns its report. `demo` is the backend's only
+ * parameter (`ArgoEvaluationQueryParams`) and defaults to `false` there —
+ * a real run with no checkpoint/preprocessing metadata/ARGO source raises a
+ * `503` rather than fabricating a result. `demo: true` is an explicit
+ * opt-in to a clearly labelled `DEMO_SYNTHETIC` pipeline check
+ * (`validation_type`/`observational_validation`/`banner` in the response
+ * say so); it is never sent implicitly by this wrapper.
+ *
+ * @param {object} [params]
+ * @param {boolean} [params.demo] - opt in to the labelled demo pipeline
+ *   check instead of real ARGO validation; omit/false for a real run
+ * @param {object} [options]
+ * @returns {Promise<{phase: number, validation_type: string,
+ *   observational_validation: boolean, banner: string|null, argo: object,
+ *   neer_predictions: object, neer_grid: object, separation_note: string,
+ *   config: object, counts: object, depth_coverage: object,
+ *   metrics: object|null, pipeline_check_metrics: object|null,
+ *   warnings: string[], limitations: string[]}>}
+ * @throws {ApiError} "model_unavailable"/"data_unavailable" (503) — model,
+ *   dataset, preprocessing metadata, or ARGO data not available;
+ *   "argo_validation_failed" (500)
+ */
+export function argoEvaluation({ demo } = {}, options = {}) {
+  return get("/evaluation/argo", { demo }, options);
+}
+
+/**
+ * GET /explainability (backend/app/routers/explainability.py) — real
+ * gradient-x-input attribution for one date's real input sample, from an
+ * actual backward pass through the loaded model — never a fabricated or
+ * placeholder score. `date` is required; `depth` is optional
+ * (`ExplainabilityQueryParams`) — omit it to explain the sum of every
+ * model depth level's predicted anomaly, or pass one to explain that
+ * single depth (snapped to the nearest model depth level, same convention
+ * as `/reconstruct`).
+ *
+ * @param {object} params
+ * @param {string|Date} params.date - "YYYY-MM-DD", or a Date (formatted in UTC)
+ * @param {number} [params.depth] - metres, >= 0; omit to explain every depth level summed
+ * @param {object} [options]
+ * @returns {Promise<{date: string, data_mode: string, predicted_anomaly: number,
+ *   depth: number|null, depth_index: number|null, aggregated_over_depths: boolean,
+ *   method: string, channels: Array<{name: string, description: string|null,
+ *   importance: number, mean_gradient: number}>, spatial_saliency: number[][],
+ *   spatial_saliency_shape: number[], full_grid_shape: number[],
+ *   embedding_dim: number, notes: string[]}>}
+ * @throws {ApiError} "invalid_parameter" (400) — e.g. negative `depth`;
+ *   "date_not_found" (404); "model_unavailable"/"data_unavailable" (503);
+ *   "explainability_failed" (500); "validation_error" (422) for a
+ *   missing/malformed `date`
+ */
+export function explainability({ date, depth } = {}, options = {}) {
+  return get("/explainability", { date: toDateParam(date), depth }, options);
+}
+
+/**
+ * GET /data/quality (backend/app/routers/data_quality.py) — the quality
+ * report for the tensor bundle this backend process actually loaded
+ * (coverage, per-channel observed ranges, target completeness — all read
+ * off the bundle's own masks and arrays, nothing invented). Takes no
+ * parameters at all.
+ *
+ * @param {object} [options]
+ * @returns {Promise<{data_mode: string, is_synthetic: boolean,
+ *   disclaimer: string|null, source_tensors_path: string, dates: object,
+ *   summary: object, spatial_coverage: object, channels: object,
+ *   targets: object|null}>}
+ * @throws {ApiError} "data_unavailable" (503) — no dataset is loaded;
+ *   "data_quality_failed" (500)
+ */
+export function dataQuality(options = {}) {
+  return get("/data/quality", undefined, options);
+}
+
+/**
+ * GET /reconstruct/netcdf (backend/app/routers/reconstruct_netcdf.py) — the
+ * same reconstructed grid as `reconstructGrid()`, above, but returned as a
+ * downloadable NetCDF file instead of JSON (the backend serves it as a
+ * `FileResponse`). Same query parameters as `reconstructGrid` — `depth`
+ * optional, omit for every model depth level; the rest required.
+ *
+ * Unlike every other function in this module, the resolved value isn't the
+ * parsed backend JSON — it's `{ blob, filename, contentType }` from
+ * `apiRequest`'s `responseType: "blob"` mode (Requirement: export
+ * parameters). `filename` is read from the backend's `Content-Disposition`
+ * header (e.g. `neer_reconstruct_2020-01-15_500m.nc`) and falls back to a
+ * locally-built name of the same shape if that header is ever missing, so
+ * callers always have something reasonable to save the file as — e.g.
+ * `a.download = filename; a.href = URL.createObjectURL(blob)`.
+ *
+ * @param {object} params
+ * @param {number} params.latMin - southern bound, degrees [-90, 90]
+ * @param {number} params.latMax - northern bound, degrees [-90, 90]
+ * @param {number} params.lonMin - western bound, degrees [-180, 360]
+ * @param {number} params.lonMax - eastern bound, degrees [-180, 360]
+ * @param {string|Date} params.date - "YYYY-MM-DD", or a Date (formatted in UTC)
+ * @param {number} [params.depth] - metres, >= 0; omit for every model depth level
+ * @param {object} [options] - forwarded to apiRequest (signal, timeoutMs, headers);
+ *   `responseType` is fixed to "blob" and cannot be overridden by the caller
+ * @returns {Promise<{blob: Blob, filename: string, contentType: string|null}>}
+ * @throws {ApiError} "invalid_parameter" (400) — e.g. an out-of-domain
+ *   coordinate; "grid_unavailable"/"date_not_found" (404);
+ *   "model_unavailable"/"data_unavailable" (503) — including no NetCDF
+ *   engine installed; "netcdf_export_failed" (500)
+ */
+export async function netcdfExport({ latMin, latMax, lonMin, lonMax, date, depth } = {}, options = {}) {
+  const isoDate = toDateParam(date);
+  const { blob, filename, contentType } = await apiRequest("/reconstruct/netcdf", {
+    ...options,
+    method: "GET",
+    responseType: "blob",
+    params: { lat_min: latMin, lat_max: latMax, lon_min: lonMin, lon_max: lonMax, date: isoDate, depth },
+  });
+  const depthTag = depth === undefined || depth === null ? "" : `_${Math.trunc(depth)}m`;
+  return { blob, filename: filename || `neer_reconstruct_${isoDate}${depthTag}.nc`, contentType };
 }
