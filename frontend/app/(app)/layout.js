@@ -2,8 +2,9 @@
 
 // -----------------------------------------------------------------------------
 // NEER Application Shell — route-group layout  (Phase 32E, updated Phase 34A,
-// Phase 34D wires the dashboard's point-inspection workflow into this file's
-// InspectionPanel slot)
+// Phase 34D wired the dashboard's point-inspection workflow into this file's
+// InspectionPanel slot, Phase 34E adds the dashboard's KPI drawer content and
+// threads the shared reconstruction result through to <PointInspection>)
 //
 // This is the single integration point between the generic shell
 // (components/shell) and Next.js routing: every real NEER section
@@ -33,60 +34,36 @@
 // dashboard/_context/PointInspectionContext.js for why this state has to
 // live above both OceanMap (in page.js) and this file's InspectionPanel
 // slot in the first place.
+//
+// Phase 34E: the dashboard's KPI drawer content is now the real
+// <DashboardKPIs> (dashboard/_components/DashboardKPIs.js), not the static
+// DASHBOARD_KPIS placeholder array this file used to hardcode — it reads
+// PointInspectionContext itself, the same way <PointInspection> does, so no
+// KPI values need threading through this component beyond the context
+// Provider already wrapping it. <PointInspection> now also receives the
+// context's shared `pointInspection` (the `reconstruct()` request state) as
+// a plain prop, since that component deliberately has no import of the
+// context (see its own header comment).
 // -----------------------------------------------------------------------------
 
 import { useState } from "react";
 import { usePathname } from "next/navigation";
-import { Compass, Gauge, Grid3x3, Satellite, Thermometer } from "lucide-react";
+import { Compass } from "lucide-react";
 import { AppShell, InspectionPanel, KPIDrawer, MainContent, Sidebar, TopNavigation } from "@/components/shell";
 import { Panel, StatusIndicator } from "@/components/ui";
 import { PointInspection } from "@/components/inspection";
 import { PointInspectionProvider, usePointInspection } from "./dashboard/_context/PointInspectionContext";
+import DashboardKPIs from "./dashboard/_components/DashboardKPIs";
 import { formatLat, formatLon } from "@/lib/oceanDomain";
 
 const MAIN_CONTENT_ID = "neer-main-content";
 
-// Placeholder KPI values for the dashboard route's KPI drawer — realistic
-// shape and units, wired to a live source in a later phase.
-const DASHBOARD_KPIS = [
-  {
-    id: "coverage",
-    title: "Grid Coverage",
-    value: "94.2",
-    unit: "%",
-    icon: Grid3x3,
-    trend: { direction: "up", value: "+1.2%" },
-  },
-  {
-    id: "mean-sst",
-    title: "Mean SST",
-    value: "28.4",
-    unit: "°C",
-    icon: Thermometer,
-  },
-  {
-    id: "argo-floats",
-    title: "Active Argo Floats",
-    value: "182",
-    icon: Satellite,
-    trend: { direction: "flat", value: "0" },
-  },
-  {
-    id: "latency",
-    title: "Reconstruction Latency",
-    value: "340",
-    unit: "ms",
-    icon: Gauge,
-    trend: { direction: "down", value: "-18ms", tone: "positive" },
-  },
-];
-
 export default function AppRouteGroupLayout({ children }) {
-  // The dashboard route's current date/depth/data-mode "view" — same
-  // Phase 34B/C placeholder values page.js and DataContextPanel each
-  // hardcoded independently; see PointInspectionContext.js's header
-  // comment. Harmless to provide on every route: only the dashboard's
-  // OceanMapSection/PointInspection consume it today.
+  // The dashboard route's current date/depth/data-mode "view" plus its
+  // selection and shared reconstruction fetch — see
+  // PointInspectionContext.js's header comment. Harmless to provide on every
+  // route: only the dashboard's OceanMapSection/DataContextSection/
+  // PointInspection/DashboardKPIs consume it today.
   return (
     <PointInspectionProvider>
       <AppShellContent>{children}</AppShellContent>
@@ -97,7 +74,7 @@ export default function AppRouteGroupLayout({ children }) {
 function AppShellContent({ children }) {
   const pathname = usePathname();
   const isDashboard = pathname === "/dashboard";
-  const { selectedPoint, clearSelection, dataMode, date, depth } = usePointInspection();
+  const { selectedPoint, clearSelection, dataMode, date, depth, pointInspection } = usePointInspection();
 
   // Starts open: on desktop/xl there is currently no in-page control to
   // reopen it once closed (a future page can add one via headerActions/a
@@ -140,6 +117,7 @@ function AppShellContent({ children }) {
                 depth={depth}
                 dataMode={dataMode}
                 onClose={clearSelection}
+                reconstruction={pointInspection}
               />
             ) : (
               <Panel emphasis="raised" icon={Compass} title="Nothing selected">
@@ -153,16 +131,14 @@ function AppShellContent({ children }) {
           </InspectionPanel>
         }
         kpiDrawer={
-          <KPIDrawer
-            title={isDashboard ? "Mission KPIs" : "Key Indicators"}
-            kpis={isDashboard ? DASHBOARD_KPIS : undefined}
-            status={isDashboard ? { status: "online", label: "Pipeline nominal" } : undefined}
-            summary={
-              isDashboard ? undefined : (
-                <span className="text-small text-text-muted">No metrics yet for this section</span>
-              )
-            }
-          />
+          isDashboard ? (
+            <DashboardKPIs />
+          ) : (
+            <KPIDrawer
+              title="Key Indicators"
+              summary={<span className="text-small text-text-muted">No metrics yet for this section</span>}
+            />
+          )
         }
       >
         <MainContent id={MAIN_CONTENT_ID}>{children}</MainContent>

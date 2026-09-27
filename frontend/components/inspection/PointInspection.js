@@ -1,39 +1,50 @@
 "use client";
 
 // -----------------------------------------------------------------------------
-// NEER — PointInspection  (Phase 34D)
+// NEER — PointInspection  (Phase 34D, Phase 34E: fetch moved to context)
 //
-// The point-inspection workflow: given a selected grid cell (lat/lon) plus
-// the date/depth/data-mode currently in view, fetches and displays what the
-// reconstruction model says about that cell — reconstructed temperature,
-// anomaly, model confidence, the input variables that fed the reconstruction,
-// and the data's availability/status. Designed to render inside the shared
-// shell InspectionPanel (components/shell/InspectionPanel.js, Phase 32D) —
-// that component owns the panel chrome (open/close, header, scroll); this
-// one owns only the content, and is plain props-in/callbacks-out so any
-// future workflow (Reconstruction, Explainability, Evaluation — Requirement
-// 11) can render it inside its own InspectionPanel with its own state, the
-// same way OceanMap.js is reusable outside the dashboard route.
+// The point-inspection workflow: given a selected grid cell (lat/lon), the
+// date/depth/data-mode currently in view, and the result of inspecting that
+// cell, renders what the reconstruction model says about it — reconstructed
+// temperature, anomaly, model confidence, the input variables that fed the
+// reconstruction, and the data's availability/status. Designed to render
+// inside the shared shell InspectionPanel (components/shell/
+// InspectionPanel.js, Phase 32D) — that component owns the panel chrome
+// (open/close, header, scroll); this one owns only the content.
+//
+// Phase 34E change: this component no longer calls `reconstruct()` itself.
+// The KPI drawer added this phase (dashboard/_components/DashboardKPIs.js)
+// needs the *same* reconstructed temperature/anomaly for the *same*
+// selection, and fetching it twice (once here, once there) would violate
+// Requirement 10 below just as much as calling it from two unrelated
+// components would have in Phase 34D. The fetch now lives in
+// PointInspectionContext (dashboard/_context/PointInspectionContext.js —
+// see its Phase 34E header comment for how it avoids the stale-data-for-one-
+// frame problem this file's old `key`-forced-remount trick used to solve),
+// and is passed down as the `reconstruction` prop by whoever wires this
+// component up (today, app/(app)/layout.js). This file is still plain
+// props-in/callbacks-out and has no import of that context, so it stays
+// exactly as reusable outside the dashboard route as it was in Phase 34D —
+// any future workflow can still render it with its own fetch state shaped
+// however that workflow's own state lives.
 //
 // Real vs. placeholder data (per the phase spec: "use placeholder/demo
 // values where backend integration is not yet available" — same rule
 // OceanMap.js follows for its unbuilt layers): temperature and anomaly come
-// from the real `reconstruct` endpoint (frontend/lib/api.js, Phase 33B) —
-// this is the first real caller of that module (see its own header comment:
-// "Still not called from any page/component yet ... that starts once real
-// pages are built"). Model confidence and the input-variable list have no
-// backend field yet (see reconstruct()'s JSDoc return shape) — those are
-// demo values, and every one of them is labeled "Demo" in the UI rather than
-// presented as if the model computed them. Data-mode/cache/notes in the
-// "Data availability" section are real, straight off the API response.
+// from the real `reconstruct` endpoint (frontend/lib/api.js, Phase 33B).
+// Model confidence and the input-variable list have no backend field yet
+// (see `reconstruct()`'s JSDoc return shape) — those are demo values, and
+// every one of them is labeled "Demo" in the UI rather than presented as if
+// the model computed them. Data-mode/cache/notes in the "Data availability"
+// section are real, straight off the API response.
 //
-// All fetching lives here (Requirement 10 — "do not duplicate API-fetching
-// logic inside unrelated components"): OceanMap only reports a selected
-// point via onSelectPoint, it never calls the API itself; this is the only
-// place `reconstruct()` is called from the dashboard.
+// All fetching for the dashboard route lives in PointInspectionContext
+// (Requirement 10 — "do not duplicate API-fetching logic inside unrelated
+// components"): OceanMap only reports a selected point via onSelectPoint, it
+// never calls the API itself; this component only renders a result it's
+// handed.
 // -----------------------------------------------------------------------------
 
-import { useEffect } from "react";
 import {
   CalendarDays,
   Database,
@@ -47,8 +58,7 @@ import {
 } from "lucide-react";
 import { Badge, Button, ErrorState, LoadingSkeleton, MetricCard, Panel, StatusIndicator } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { reconstruct } from "@/lib/api";
-import { useApiRequest } from "@/lib/useApiRequest";
+import { formatDate, formatSigned } from "@/lib/format";
 import { formatDepth, formatLat, formatLon } from "@/lib/oceanDomain";
 
 const MODE_CONFIG = {
@@ -63,29 +73,15 @@ const EMPTY_PREVIEW_FIELDS = [
   { label: "Model confidence", unit: "%" },
 ];
 
-// Demo-only stand-ins — see the header comment above. Not derived from the
-// selected point in any way, on purpose, so they never look computed.
+// Demo-only stand-in — see the header comment above. Not derived from the
+// selected point in any way, on purpose, so it never looks computed. Kept as
+// the same constant DashboardKPIs.js uses, so the two panels never disagree.
 const DEMO_CONFIDENCE_PERCENT = 87;
 const DEMO_INPUT_VARIABLES = [
   { label: "Nearby Argo profiles", value: "3 within 50 km" },
   { label: "Satellite SST", value: "Available" },
   { label: "Altimetry (SSH)", value: "Available" },
 ];
-
-const DATE_FORMAT = { day: "2-digit", month: "short", year: "numeric" };
-
-function formatDate(date) {
-  if (!date) return "No date selected";
-  const parsed = date instanceof Date ? date : new Date(date);
-  if (Number.isNaN(parsed.getTime())) return String(date);
-  return parsed.toLocaleDateString("en-GB", DATE_FORMAT);
-}
-
-function formatSigned(value, digits = 2) {
-  if (typeof value !== "number" || Number.isNaN(value)) return "--";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(digits)}`;
-}
 
 /**
  * @param {{lat: number, lon: number}|null|undefined} selectedPoint - the
@@ -96,6 +92,17 @@ function formatSigned(value, digits = 2) {
  * @param {"reconstructed"|"observed"|"blended"} dataMode
  * @param {() => void} onClose - clears the current selection; the component
  *   always renders a labeled way back to the empty state (Requirement 4)
+ * @param {{
+ *   data: object|null,
+ *   error: import("@/lib/api").ApiError|null,
+ *   isLoading: boolean,
+ *   isIdle: boolean,
+ *   isSuccess: boolean,
+ *   isError: boolean,
+ *   retry: () => void,
+ * }} reconstruction - the shared `reconstruct()` request state for
+ *   `selectedPoint` at `date`/`depth` (Phase 34E — see
+ *   PointInspectionContext.js). Ignored when `selectedPoint` is falsy.
  */
 export default function PointInspection({
   selectedPoint,
@@ -103,6 +110,7 @@ export default function PointInspection({
   depth = 0,
   dataMode = "reconstructed",
   onClose,
+  reconstruction,
   className,
 }) {
   // --- Empty state (Requirement 6) ----------------------------------------
@@ -132,42 +140,7 @@ export default function PointInspection({
     );
   }
 
-  // `key` forces a fresh mount — and so a fresh, from-idle useApiRequest —
-  // every time the selection (or the date/depth it's inspected at) changes,
-  // instead of one long-lived request hook whose state an effect re-syncs
-  // on every change. Without this, switching straight from a resolved point
-  // to a new one would render one frame of the OLD point's temperature/
-  // anomaly under the NEW point's coordinates (the effect that starts the
-  // new fetch can't run until after that render). Remounting sidesteps the
-  // mismatch entirely rather than papering over it with a manual
-  // data-matches-selection check.
-  return (
-    <PointInspectionResult
-      key={`${selectedPoint.lat}-${selectedPoint.lon}-${date}-${depth}`}
-      selectedPoint={selectedPoint}
-      date={date}
-      depth={depth}
-      dataMode={dataMode}
-      onClose={onClose}
-      className={className}
-    />
-  );
-}
-
-function PointInspectionResult({ selectedPoint, date, depth, dataMode, onClose, className }) {
-  const { data, error, run, isLoading, isIdle, isError, isSuccess } = useApiRequest(reconstruct);
-
-  useEffect(() => {
-    run({ lat: selectedPoint.lat, lon: selectedPoint.lon, date, depth }).catch(() => {
-      // Swallowed here on purpose — useApiRequest already captured the
-      // failure in `error`/`isError` for the error state below to render.
-    });
-    // Deliberately empty deps: this component is remounted (see the `key`
-    // above) whenever selectedPoint/date/depth change, so "run once per
-    // mount" is exactly "run once per unique selection".
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  const { data, error, isLoading, isIdle, isError, isSuccess, retry } = reconstruction ?? {};
   const modeConfig = MODE_CONFIG[dataMode] ?? MODE_CONFIG.reconstructed;
 
   // Coordinates + date/depth context — always shown once a point is
@@ -227,7 +200,7 @@ function PointInspectionResult({ selectedPoint, date, depth, dataMode, onClose, 
         <ErrorState
           title="Inspection failed"
           message={error?.message || "This grid cell's reconstructed values couldn't be loaded."}
-          onRetry={() => run({ lat: selectedPoint.lat, lon: selectedPoint.lon, date, depth }).catch(() => {})}
+          onRetry={retry}
           details={error ? `${error.code}${error.status ? ` · HTTP ${error.status}` : ""}` : undefined}
         />
         {clearSelectionButton}

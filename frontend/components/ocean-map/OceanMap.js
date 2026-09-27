@@ -20,6 +20,15 @@
 // selection is local UI state (with an `onSelectPoint` escape hatch) — wiring
 // it to the shared InspectionPanel is left to whichever later phase owns
 // that integration.
+//
+// Phase 35A adds the "architecture ... for backend-driven scientific
+// layers" its spec asks for, via useOceanMapLayer.js: a real GET
+// /reconstruct/grid fetch, keyed off the active variable tab / date / depth
+// / visible viewport, still with no rendering wired up (the spec repeats
+// Phase 34C's "do not implement the temperature or anomaly data layers
+// yet") — see that file's header for the variable -> backend-support table
+// and the cell-limit check. Its result only powers the legend's status
+// line below; a future phase turns `layer.values` into an actual overlay.
 // -----------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -51,9 +60,11 @@ import {
   formatDepth,
   formatLat,
   formatLon,
+  round2,
   snapToGrid,
 } from "@/lib/oceanDomain";
 import { LANDMASSES, VIEW_BOX, isOnLand, project, unproject } from "./landmask";
+import { useOceanMapLayer } from "./useOceanMapLayer";
 
 // Variable/layer tabs — the four with real interaction wired (sst/sss/
 // currents/anomaly) plus the remaining layers named in the phase spec,
@@ -112,6 +123,35 @@ function clientToViewBox(clientX, clientY, rect) {
     x: (clientX - rect.left - offsetX) / pxPerUnit,
     y: (clientY - rect.top - offsetY) / pxPerUnit,
   };
+}
+
+/**
+ * Turns a useOceanMapLayer() result into the legend's one-line status —
+ * this is the only place its result is read; nothing here renders the
+ * fetched grid itself (see useOceanMapLayer.js's header for why).
+ */
+function describeLayerStatus(layer, activeLabel) {
+  if (!layer.supported) {
+    return `${activeLabel} · ${layer.reason} — demo interaction only`;
+  }
+  if (layer.tooLargeForCellLimit) {
+    return `${activeLabel} · Zoom in to load live grid data (visible region too large for one request)`;
+  }
+  if (layer.isLoading) {
+    return `${activeLabel} · Loading live grid data…`;
+  }
+  if (layer.isError) {
+    return `${activeLabel} · Grid request failed — ${layer.error?.message ?? "unknown error"}`;
+  }
+  if (layer.values) {
+    const rows = layer.grid?.lat?.length ?? 0;
+    const cols = layer.grid?.lon?.length ?? 0;
+    return `${activeLabel} · Live grid loaded (${rows}×${cols} cells) — visualization not yet implemented`;
+  }
+  if (layer.status === "success") {
+    return `${activeLabel} · No climatology for this date — anomaly unavailable`;
+  }
+  return `${activeLabel} · No date selected — demo interaction only`;
 }
 
 function ToolbarButton({ icon, label, onClick, active }) {
@@ -347,6 +387,26 @@ export default function OceanMap({
     for (let lon = OCEAN_DOMAIN.lonMin; lon <= OCEAN_DOMAIN.lonMax; lon += 5) lines.push(lon);
     return lines;
   }, []);
+
+  // Current visible viewport, in lon/lat — same inverse-projection
+  // handlePointerMove already uses per-pixel, applied to the surface's two
+  // corners instead. This is the region useOceanMapLayer requests: panning/
+  // zooming changes what's fetched, not just what's drawn.
+  const visibleBounds = useMemo(() => {
+    const topLeft = unproject((0 - transform.x) / transform.scale, (0 - transform.y) / transform.scale);
+    const bottomRight = unproject(
+      (VIEW_BOX.width - transform.x) / transform.scale,
+      (VIEW_BOX.height - transform.y) / transform.scale
+    );
+    return {
+      latMin: clamp(round2(bottomRight.lat), OCEAN_DOMAIN.latMin, OCEAN_DOMAIN.latMax),
+      latMax: clamp(round2(topLeft.lat), OCEAN_DOMAIN.latMin, OCEAN_DOMAIN.latMax),
+      lonMin: clamp(round2(topLeft.lon), OCEAN_DOMAIN.lonMin, OCEAN_DOMAIN.lonMax),
+      lonMax: clamp(round2(bottomRight.lon), OCEAN_DOMAIN.lonMin, OCEAN_DOMAIN.lonMax),
+    };
+  }, [transform]);
+
+  const layer = useOceanMapLayer({ variable: activeVariable, date, depth, bounds: visibleBounds });
 
   const hoverOnLand = hover ? isOnLand(hover.lat, hover.lon) : false;
   const selectedOnLand = activeSelected ? isOnLand(activeSelected.lat, activeSelected.lon) : false;
@@ -628,9 +688,7 @@ export default function OceanMap({
               Selected cell
             </span>
           </div>
-          <p className="text-caption text-text-disabled">
-            {activeLabel} · No layer data loaded — demo interaction only
-          </p>
+          <p className="text-caption text-text-disabled">{describeLayerStatus(layer, activeLabel)}</p>
         </div>
       </div>
 
