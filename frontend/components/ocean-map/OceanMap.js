@@ -24,11 +24,21 @@
 // Phase 35A adds the "architecture ... for backend-driven scientific
 // layers" its spec asks for, via useOceanMapLayer.js: a real GET
 // /reconstruct/grid fetch, keyed off the active variable tab / date / depth
-// / visible viewport, still with no rendering wired up (the spec repeats
-// Phase 34C's "do not implement the temperature or anomaly data layers
-// yet") — see that file's header for the variable -> backend-support table
-// and the cell-limit check. Its result only powers the legend's status
-// line below; a future phase turns `layer.values` into an actual overlay.
+// / visible viewport — see that file's header for the variable ->
+// backend-support table and the cell-limit check.
+//
+// Phase 35B renders that fetch: `layer.values`/`layer.grid` are drawn as a
+// real, separate TemperatureLayer.js SVG layer (own visibility toggle, own
+// <g>, composited over the base map but under the coastline mask so
+// land — including any cell the backend didn't mask itself — never shows a
+// fabricated ocean color), colored with a continuous scale from
+// lib/colorScale.js domain-fitted to that field's own real min/max (never a
+// hard-coded physical range). Loading/error/empty states for the fetch are
+// surfaced here as their own overlays — LoadingSkeleton-style spinner,
+// ErrorState with retry, and a plain "no field" message — rather than
+// silently leaving the map blank. Nothing here still invents a scientific
+// value: an unsupported variable (sss/currents/ssh/winds/subsurface/
+// uncertainty) or a cell the backend returned as `null` never gets drawn.
 // -----------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -40,6 +50,7 @@ import {
   Database,
   Droplets,
   Layers,
+  Loader2,
   Maximize2,
   Minimize2,
   MoveVertical,
@@ -52,8 +63,15 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { Badge, Button, Panel, Tabs, Tooltip } from "@/components/ui";
+import { Badge, Button, ErrorState, Panel, Tabs, Tooltip } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import {
+  VARIABLE_COLOR_CONFIG,
+  computeFiniteExtent,
+  divergingColor,
+  makeColorMapper,
+  thermalColor,
+} from "@/lib/colorScale";
 import {
   OCEAN_DOMAIN,
   clamp,
@@ -64,6 +82,8 @@ import {
   snapToGrid,
 } from "@/lib/oceanDomain";
 import { LANDMASSES, VIEW_BOX, isOnLand, project, unproject } from "./landmask";
+import TemperatureLayer from "./TemperatureLayer";
+import TemperatureLegend from "./TemperatureLegend";
 import { useOceanMapLayer } from "./useOceanMapLayer";
 
 // Variable/layer tabs — the four with real interaction wired (sst/sss/
@@ -126,9 +146,7 @@ function clientToViewBox(clientX, clientY, rect) {
 }
 
 /**
- * Turns a useOceanMapLayer() result into the legend's one-line status —
- * this is the only place its result is read; nothing here renders the
- * fetched grid itself (see useOceanMapLayer.js's header for why).
+ * Turns a useOceanMapLayer() result into the legend's one-line status.
  */
 function describeLayerStatus(layer, activeLabel) {
   if (!layer.supported) {
@@ -146,12 +164,34 @@ function describeLayerStatus(layer, activeLabel) {
   if (layer.values) {
     const rows = layer.grid?.lat?.length ?? 0;
     const cols = layer.grid?.lon?.length ?? 0;
-    return `${activeLabel} · Live grid loaded (${rows}×${cols} cells) — visualization not yet implemented`;
+    return `${activeLabel} · Live grid loaded (${rows}×${cols} cells)`;
   }
   if (layer.status === "success") {
     return `${activeLabel} · No climatology for this date — anomaly unavailable`;
   }
   return `${activeLabel} · No date selected — demo interaction only`;
+}
+
+/**
+ * Nearest-cell lookup of a real field value for the coordinate readout —
+ * reads the same `grid`/`values` the map layer draws, never a separately
+ * fetched or fabricated number. Returns `null` when there's no loaded grid,
+ * the point falls outside it, or the nearest cell was itself missing/masked.
+ */
+function lookupFieldValue(grid, values, point) {
+  if (!grid || !values || !point) return null;
+  const { lat, lon } = grid;
+  if (!lat?.length || !lon?.length) return null;
+  const latIndex = lat.reduce(
+    (best, candidate, i) => (Math.abs(candidate - point.lat) < Math.abs(lat[best] - point.lat) ? i : best),
+    0
+  );
+  const lonIndex = lon.reduce(
+    (best, candidate, i) => (Math.abs(candidate - point.lon) < Math.abs(lon[best] - point.lon) ? i : best),
+    0
+  );
+  const value = values[latIndex]?.[lonIndex];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function ToolbarButton({ icon, label, onClick, active }) {
@@ -205,6 +245,7 @@ export default function OceanMap({
     fineGrid: true,
     coastline: true,
     domainBoundary: true,
+    temperatureField: true,
   });
 
   const isVariableControlled = variable !== undefined;
@@ -408,6 +449,21 @@ export default function OceanMap({
 
   const layer = useOceanMapLayer({ variable: activeVariable, date, depth, bounds: visibleBounds });
 
+  // Color scale for whatever field is actually loaded — domain-fitted to
+  // that field's own real finite min/max (computeFiniteExtent), never a
+  // hard-coded physical range, and `null` whenever there's nothing to draw
+  // yet (unsupported variable, no data, or every cell masked).
+  const colorConfig = VARIABLE_COLOR_CONFIG[activeVariable] ?? null;
+  const fieldExtent = layer.values ? computeFiniteExtent(layer.values) : null;
+  const colorMapper = colorConfig && fieldExtent ? makeColorMapper(colorConfig.kind, fieldExtent) : null;
+  const legendSample = colorConfig?.kind === "diverging" ? divergingColor : thermalColor;
+
+  // "No field available" is distinct from "loading"/"errored"/"unsupported":
+  // the request succeeded but there is genuinely nothing to draw (e.g. no
+  // climatology for this date, so anomaly can't be derived).
+  const showEmptyFieldState =
+    layer.supported && Boolean(date) && layer.status === "success" && !layer.isLoading && !layer.values;
+
   const hoverOnLand = hover ? isOnLand(hover.lat, hover.lon) : false;
   const selectedOnLand = activeSelected ? isOnLand(activeSelected.lat, activeSelected.lon) : false;
   const hoverInDomain =
@@ -419,6 +475,10 @@ export default function OceanMap({
 
   const readoutLat = hover ? formatLat(hover.lat) : activeSelected ? formatLat(activeSelected.lat) : "--.--°";
   const readoutLon = hover ? formatLon(hover.lon) : activeSelected ? formatLon(activeSelected.lon) : "--.--°";
+  const readoutPoint = hover ?? activeSelected ?? null;
+  const readoutValue = lookupFieldValue(layer.grid, layer.values, readoutPoint);
+  const readoutValueText =
+    readoutValue === null ? "--" : `${readoutValue.toFixed(2)}${colorConfig?.unit ?? ""}`;
 
   return (
     <Panel
@@ -515,6 +575,16 @@ export default function OceanMap({
             {layerVisibility.fineGrid && transform.scale >= FINE_GRID_MIN_SCALE && (
               <rect x={0} y={0} width={VIEW_BOX.width} height={VIEW_BOX.height} fill="url(#fineGrid)" />
             )}
+
+            {/* Backend-driven scientific field — its own layer, toggleable
+                independently, drawn under the coastline mask below so land
+                is never colored as if it were an ocean grid cell. */}
+            <TemperatureLayer
+              grid={layer.grid}
+              values={layer.values}
+              colorMapper={colorMapper}
+              visible={layerVisibility.temperatureField}
+            />
 
             {layerVisibility.graticule &&
               latLines.map((lat) => {
@@ -641,6 +711,7 @@ export default function OceanMap({
           >
             <p className="px-1 pb-1 text-caption uppercase tracking-widest text-text-muted">Map layers</p>
             {[
+              { key: "temperatureField", label: `${activeLabel} field` },
               { key: "graticule", label: "Graticule & labels" },
               { key: "fineGrid", label: "0.25° grid (on zoom)" },
               { key: "coastline", label: "Coastline" },
@@ -672,8 +743,39 @@ export default function OceanMap({
           <ToolbarButton icon={ZoomOut} label="Zoom out" onClick={() => zoomByButton(1 / ZOOM_STEP)} />
         </div>
 
+        {/* Scientific field — loading state. Non-blocking: the base map
+            stays interactive while GET /reconstruct/grid is in flight. */}
+        {layer.supported && layerVisibility.temperatureField && layer.isLoading && (
+          <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border-strong bg-surface-overlay/95 px-3 py-1.5 text-caption text-text-secondary shadow-raised">
+            <Loader2 size={13} strokeWidth={2} className="animate-spin text-accent-400" aria-hidden="true" />
+            Loading {activeLabel?.toLowerCase()} field…
+          </div>
+        )}
+
+        {/* Scientific field — error state, with a retry that re-issues the
+            same GET /reconstruct/grid request. */}
+        {layer.supported && layerVisibility.temperatureField && layer.isError && (
+          <div className="absolute inset-x-4 top-3 z-raised flex justify-center">
+            <ErrorState
+              className="w-full max-w-sm bg-surface-overlay/95 py-5 shadow-raised"
+              title="Field data unavailable"
+              message={layer.error?.message ?? "The scientific field could not be loaded."}
+              onRetry={layer.retry}
+            />
+          </div>
+        )}
+
+        {/* Scientific field — empty state: the request succeeded but this
+            date/variable genuinely has nothing to draw. */}
+        {layerVisibility.temperatureField && showEmptyFieldState && (
+          <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border-strong bg-surface-overlay/95 px-3 py-1.5 text-caption text-text-muted shadow-raised">
+            <AlertTriangle size={13} strokeWidth={1.75} aria-hidden="true" />
+            No {activeLabel?.toLowerCase()} field available for this date
+          </div>
+        )}
+
         {/* Legend */}
-        <div className="absolute bottom-3 left-3 flex flex-col gap-1.5 rounded-md border border-border bg-surface-base/90 px-3 py-2 backdrop-blur-sm">
+        <div className="absolute bottom-3 left-3 flex flex-col gap-2 rounded-md border border-border bg-surface-base/90 px-3 py-2 backdrop-blur-sm">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-text-muted">
             <span className="flex items-center gap-1.5">
               <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: "#0E2A42" }} aria-hidden="true" />
@@ -688,6 +790,16 @@ export default function OceanMap({
               Selected cell
             </span>
           </div>
+
+          {colorConfig && fieldExtent && layerVisibility.temperatureField && (
+            <TemperatureLegend
+              kind={colorConfig.kind}
+              sample={legendSample}
+              extent={fieldExtent}
+              unit={colorConfig.unit}
+              label={`${activeLabel} (live)`}
+            />
+          )}
           <p className="text-caption text-text-disabled">{describeLayerStatus(layer, activeLabel)}</p>
         </div>
       </div>
@@ -697,7 +809,7 @@ export default function OceanMap({
         <span>LAT {readoutLat}</span>
         <span>LON {readoutLon}</span>
         <span>DEPTH {depth} m</span>
-        <span>VALUE --</span>
+        <span>VALUE {readoutValueText}</span>
         {(hover || activeSelected) && (
           <Badge variant={(hover ? hoverOnLand : selectedOnLand) ? "neutral" : "accent"} size="sm">
             {(hover ? hoverOnLand : selectedOnLand) ? (

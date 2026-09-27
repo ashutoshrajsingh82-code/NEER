@@ -29,6 +29,10 @@
 // subtraction the backend does for the point endpoint, and is only
 // available when the backend actually returned a `climatology` grid for
 // that date (it's nullable per the schema).
+//
+// Phase 35B wires this hook's `values`/`grid` into an actual on-map layer
+// (see TemperatureLayer.js) and adds `retry` below so a failed request can
+// be retried from an ErrorState without waiting for a param change.
 export const LAYER_SUPPORT = Object.freeze({
   sst: { supported: true, field: "temperature" },
   anomaly: { supported: true, field: "anomaly" },
@@ -47,7 +51,7 @@ export const LAYER_SUPPORT = Object.freeze({
 // sync if the backend constant changes.
 export const MAX_GRID_POINTS = 4096;
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { reconstructGrid } from "@/lib/api";
 import { useApiRequest } from "@/lib/useApiRequest";
 import { OCEAN_DOMAIN } from "@/lib/oceanDomain";
@@ -139,6 +143,19 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
 
   const grid = data ? { lat: data.lat, lon: data.lon, depth: data.depth, depths: data.depths } : null;
 
+  // Re-issues the same request after a failure (e.g. a transient network
+  // error) without waiting for date/depth/bounds to change — the request
+  // key above only re-fires the effect on a genuine parameter change, so a
+  // caller-triggered retry after `isError` needs its own escape hatch.
+  const retry = useCallback(() => {
+    if (!canFetch) return;
+    run({ latMin, latMax, lonMin, lonMax, date, depth }).catch(() => {
+      // Swallowed here on purpose — `error`/`isError` above already
+      // capture the failure for the caller to render.
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canFetch, latMin, latMax, lonMin, lonMax, date, depth]);
+
   return {
     supported: support.supported,
     reason: support.supported ? null : support.reason,
@@ -150,6 +167,7 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
     grid,
     estimatedCells,
     tooLargeForCellLimit,
+    retry,
   };
 }
 
