@@ -1,7 +1,7 @@
 "use client";
 
 // -----------------------------------------------------------------------------
-// NEER Application Shell — route-group layout  (Phase 32E)
+// NEER Application Shell — route-group layout  (Phase 32E, updated Phase 34A)
 //
 // This is the single integration point between the generic shell
 // (components/shell) and Next.js routing: every real NEER section
@@ -16,20 +16,62 @@
 // pages (app/(app)/<route>/page.js) render only inside <MainContent>'s
 // children; none of them need to know the shell exists.
 //
-// InspectionPanel and KPIDrawer are optional per AppShell's contract — they
-// are included here, generic and content-free, purely so their open/closed
-// and expand/collapse state can be exercised on every route while future
-// phases decide, page by page, whether/what to put inside them.
+// InspectionPanel and KPIDrawer are optional per AppShell's contract and are
+// shared across every route. Phase 34A gives the dashboard route ("right
+// point-inspection area" + "bottom KPI drawer" in its spec) real, dashboard-
+// shaped placeholder content in those same shared slots — keyed off the
+// current pathname — while every other route keeps the generic, content-free
+// placeholder from Phase 32E until its own phase defines what belongs there.
 // -----------------------------------------------------------------------------
 
 import { useState } from "react";
-import { Compass } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { Compass, Gauge, Grid3x3, Satellite, Thermometer } from "lucide-react";
 import { AppShell, InspectionPanel, KPIDrawer, MainContent, Sidebar, TopNavigation } from "@/components/shell";
 import { Panel, StatusIndicator } from "@/components/ui";
+import PointInspectionPlaceholder from "./dashboard/_components/PointInspectionPlaceholder";
 
 const MAIN_CONTENT_ID = "neer-main-content";
 
+// Placeholder KPI values for the dashboard route's KPI drawer — realistic
+// shape and units, wired to a live source in a later phase.
+const DASHBOARD_KPIS = [
+  {
+    id: "coverage",
+    title: "Grid Coverage",
+    value: "94.2",
+    unit: "%",
+    icon: Grid3x3,
+    trend: { direction: "up", value: "+1.2%" },
+  },
+  {
+    id: "mean-sst",
+    title: "Mean SST",
+    value: "28.4",
+    unit: "°C",
+    icon: Thermometer,
+  },
+  {
+    id: "argo-floats",
+    title: "Active Argo Floats",
+    value: "182",
+    icon: Satellite,
+    trend: { direction: "flat", value: "0" },
+  },
+  {
+    id: "latency",
+    title: "Reconstruction Latency",
+    value: "340",
+    unit: "ms",
+    icon: Gauge,
+    trend: { direction: "down", value: "-18ms", tone: "positive" },
+  },
+];
+
 export default function AppRouteGroupLayout({ children }) {
+  const pathname = usePathname();
+  const isDashboard = pathname === "/dashboard";
+
   // Starts open: on desktop/xl there is currently no in-page control to
   // reopen it once closed (a future page can add one via headerActions/a
   // toolbar button), so defaulting to open keeps the panel reachable.
@@ -53,21 +95,36 @@ export default function AppRouteGroupLayout({ children }) {
         sidebar={<Sidebar />}
         inspectionPanel={
           <InspectionPanel
-            title="Inspector"
-            subtitle="No selection"
+            title={isDashboard ? "Point Inspection" : "Inspector"}
+            subtitle={isDashboard ? "Click the map to inspect a location" : "No selection"}
             open={inspectorOpen}
             onClose={() => setInspectorOpen(false)}
           >
-            <Panel emphasis="raised" icon={Compass} title="Nothing selected">
-              <p className="text-small text-text-secondary">
-                Pages built in later phases will populate this panel with contextual detail for
-                whatever is selected (a grid cell, a reconstruction result, model output, and so
-                on). It has no content of its own yet.
-              </p>
-            </Panel>
+            {isDashboard ? (
+              <PointInspectionPlaceholder />
+            ) : (
+              <Panel emphasis="raised" icon={Compass} title="Nothing selected">
+                <p className="text-small text-text-secondary">
+                  Pages built in later phases will populate this panel with contextual detail for
+                  whatever is selected (a grid cell, a reconstruction result, model output, and so
+                  on). It has no content of its own yet.
+                </p>
+              </Panel>
+            )}
           </InspectionPanel>
         }
-        kpiDrawer={<KPIDrawer title="Key Indicators" summary={<span className="text-small text-text-muted">No metrics yet for this section</span>} />}
+        kpiDrawer={
+          <KPIDrawer
+            title={isDashboard ? "Mission KPIs" : "Key Indicators"}
+            kpis={isDashboard ? DASHBOARD_KPIS : undefined}
+            status={isDashboard ? { status: "online", label: "Pipeline nominal" } : undefined}
+            summary={
+              isDashboard ? undefined : (
+                <span className="text-small text-text-muted">No metrics yet for this section</span>
+              )
+            }
+          />
+        }
       >
         <MainContent id={MAIN_CONTENT_ID}>{children}</MainContent>
       </AppShell>
