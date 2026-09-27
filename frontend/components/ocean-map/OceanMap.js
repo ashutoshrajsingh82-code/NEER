@@ -34,11 +34,26 @@
 // fabricated ocean color), colored with a continuous scale from
 // lib/colorScale.js domain-fitted to that field's own real min/max (never a
 // hard-coded physical range). Loading/error/empty states for the fetch are
-// surfaced here as their own overlays — LoadingSkeleton-style spinner,
-// ErrorState with retry, and a plain "no field" message — rather than
-// silently leaving the map blank. Nothing here still invents a scientific
-// value: an unsupported variable (sss/currents/ssh/winds/subsurface/
-// uncertainty) or a cell the backend returned as `null` never gets drawn.
+// surfaced here as their own overlays — a LoadingSkeleton pill, ErrorState
+// with retry, and a plain "no field" message — rather than silently leaving
+// the map blank. Nothing here still invents a scientific value: an
+// unsupported variable (sss/currents/ssh/winds/subsurface/uncertainty) or a
+// cell the backend returned as `null` never gets drawn.
+//
+// Phase 35C-A adds the temperature-anomaly and scientific-grid layers this
+// phase's spec asks for:
+//   - Anomaly is `activeVariable === "anomaly"`, already served by the same
+//     useOceanMapLayer.js/TemperatureLayer.js machinery as SST (see that
+//     hook's header for exactly how `temperature - climatology` is derived
+//     from two real backend grids, never invented) — this phase makes its
+//     loading/error/missing-data states share the same StatusIndicator
+//     vocabulary as the rest of the design system instead of ad hoc markup.
+//   - GridOverlay.js replaces the old fixed-pixel "fineGrid" pattern with
+//     real 0.25°-aligned grid-line geometry, generated from
+//     OCEAN_DOMAIN.resolution (the same constant TemperatureLayer's cells
+//     and every /reconstruct/grid request already use), clipped to the
+//     visible viewport and coarsened by zoom so it never obscures the
+//     temperature/anomaly field beneath it.
 // -----------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -50,7 +65,6 @@ import {
   Database,
   Droplets,
   Layers,
-  Loader2,
   Maximize2,
   Minimize2,
   MoveVertical,
@@ -63,7 +77,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { Badge, Button, ErrorState, Panel, Tabs, Tooltip } from "@/components/ui";
+import { Badge, Button, ErrorState, LoadingSkeleton, Panel, StatusIndicator, Tabs, Tooltip } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import {
   VARIABLE_COLOR_CONFIG,
@@ -81,6 +95,7 @@ import {
   round2,
   snapToGrid,
 } from "@/lib/oceanDomain";
+import GridOverlay from "./GridOverlay";
 import { LANDMASSES, VIEW_BOX, isOnLand, project, unproject } from "./landmask";
 import TemperatureLayer from "./TemperatureLayer";
 import TemperatureLegend from "./TemperatureLegend";
@@ -108,7 +123,6 @@ const MODE_CONFIG = {
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 8;
-const FINE_GRID_MIN_SCALE = 3;
 const ZOOM_STEP = 1.35;
 const DATE_FORMAT = { day: "2-digit", month: "short", year: "numeric" };
 
@@ -146,30 +160,40 @@ function clientToViewBox(clientX, clientY, rect) {
 }
 
 /**
- * Turns a useOceanMapLayer() result into the legend's one-line status.
+ * Turns a useOceanMapLayer() result into the legend's one-line status text
+ * plus a StatusIndicator status key, so every layer state (unsupported,
+ * too-large-a-region, loading, errored, missing-data, or live) reads with
+ * the same online/processing/warning/error/offline vocabulary the rest of
+ * the design system uses instead of bespoke per-layer wording.
  */
 function describeLayerStatus(layer, activeLabel) {
   if (!layer.supported) {
-    return `${activeLabel} · ${layer.reason} — demo interaction only`;
+    return { status: "offline", text: `${layer.reason} — demo interaction only` };
   }
   if (layer.tooLargeForCellLimit) {
-    return `${activeLabel} · Zoom in to load live grid data (visible region too large for one request)`;
+    return {
+      status: "warning",
+      text: "Zoom in to load live grid data (visible region too large for one request)",
+    };
   }
   if (layer.isLoading) {
-    return `${activeLabel} · Loading live grid data…`;
+    return { status: "processing", text: "Loading live grid data…" };
   }
   if (layer.isError) {
-    return `${activeLabel} · Grid request failed — ${layer.error?.message ?? "unknown error"}`;
+    return { status: "error", text: `Grid request failed — ${layer.error?.message ?? "unknown error"}` };
   }
   if (layer.values) {
     const rows = layer.grid?.lat?.length ?? 0;
     const cols = layer.grid?.lon?.length ?? 0;
-    return `${activeLabel} · Live grid loaded (${rows}×${cols} cells)`;
+    return { status: "online", text: `Live grid loaded (${rows}×${cols} cells)` };
   }
   if (layer.status === "success") {
-    return `${activeLabel} · No climatology for this date — anomaly unavailable`;
+    return {
+      status: "warning",
+      text: `No ${activeLabel?.toLowerCase()} data for this date/depth — missing, not fabricated`,
+    };
   }
-  return `${activeLabel} · No date selected — demo interaction only`;
+  return { status: "unknown", text: "No date selected — demo interaction only" };
 }
 
 /**
@@ -242,7 +266,7 @@ export default function OceanMap({
   const [controlsOpen, setControlsOpen] = useState(false);
   const [layerVisibility, setLayerVisibility] = useState({
     graticule: true,
-    fineGrid: true,
+    scientificGrid: true,
     coastline: true,
     domainBoundary: true,
     temperatureField: true,
@@ -563,18 +587,11 @@ export default function OceanMap({
               <stop offset="0%" stopColor="#0E2A42" />
               <stop offset="100%" stopColor="#081826" />
             </linearGradient>
-            <pattern id="fineGrid" width="4" height="4" patternUnits="userSpaceOnUse">
-              <path d="M 4 0 L 0 0 0 4" fill="none" stroke="rgba(148,197,224,0.16)" strokeWidth="0.15" />
-            </pattern>
           </defs>
 
           {/* Pannable/zoomable map content — world-space coordinates */}
           <g transform={`translate(${transform.x} ${transform.y}) scale(${transform.scale})`}>
             <rect x={0} y={0} width={VIEW_BOX.width} height={VIEW_BOX.height} fill="url(#oceanGradient)" />
-
-            {layerVisibility.fineGrid && transform.scale >= FINE_GRID_MIN_SCALE && (
-              <rect x={0} y={0} width={VIEW_BOX.width} height={VIEW_BOX.height} fill="url(#fineGrid)" />
-            )}
 
             {/* Backend-driven scientific field — its own layer, toggleable
                 independently, drawn under the coastline mask below so land
@@ -584,6 +601,16 @@ export default function OceanMap({
               values={layer.values}
               colorMapper={colorMapper}
               visible={layerVisibility.temperatureField}
+            />
+
+            {/* Real 0.25° NEER scientific grid — drawn over the field so
+                cell boundaries stay legible, kept subtle enough (low,
+                fixed opacity) that it never competes with the field for
+                attention; see GridOverlay.js for the alignment/zoom logic. */}
+            <GridOverlay
+              bounds={visibleBounds}
+              scale={transform.scale}
+              visible={layerVisibility.scientificGrid}
             />
 
             {layerVisibility.graticule &&
@@ -713,7 +740,7 @@ export default function OceanMap({
             {[
               { key: "temperatureField", label: `${activeLabel} field` },
               { key: "graticule", label: "Graticule & labels" },
-              { key: "fineGrid", label: "0.25° grid (on zoom)" },
+              { key: "scientificGrid", label: "Scientific grid (0.25°, on zoom)" },
               { key: "coastline", label: "Coastline" },
               { key: "domainBoundary", label: "Domain boundary" },
             ].map((item) => (
@@ -731,8 +758,7 @@ export default function OceanMap({
               </label>
             ))}
             <p className="mt-1 border-t border-border-subtle px-1 pt-1.5 text-caption text-text-disabled">
-              Reserved for future layers: SST, SSS, SSH/SLA, currents, winds, subsurface temp., anomaly,
-              uncertainty.
+              Reserved for future layers: SSS, SSH/SLA, currents, winds, subsurface temp., uncertainty.
             </p>
           </div>
         )}
@@ -746,9 +772,13 @@ export default function OceanMap({
         {/* Scientific field — loading state. Non-blocking: the base map
             stays interactive while GET /reconstruct/grid is in flight. */}
         {layer.supported && layerVisibility.temperatureField && layer.isLoading && (
-          <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border-strong bg-surface-overlay/95 px-3 py-1.5 text-caption text-text-secondary shadow-raised">
-            <Loader2 size={13} strokeWidth={2} className="animate-spin text-accent-400" aria-hidden="true" />
-            Loading {activeLabel?.toLowerCase()} field…
+          <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border-strong bg-surface-overlay/95 px-3 py-1.5 shadow-raised">
+            <LoadingSkeleton
+              variant="text"
+              lines={1}
+              label={`Loading ${activeLabel?.toLowerCase()} field`}
+              className="w-40"
+            />
           </div>
         )}
 
@@ -765,12 +795,17 @@ export default function OceanMap({
           </div>
         )}
 
-        {/* Scientific field — empty state: the request succeeded but this
-            date/variable genuinely has nothing to draw. */}
+        {/* Scientific field — missing-data state: the request succeeded
+            but this date/depth genuinely has nothing to draw (e.g. no
+            climatology loaded, so anomaly can't be derived) — never
+            silently replaced with a fabricated value. */}
         {layerVisibility.temperatureField && showEmptyFieldState && (
-          <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border-strong bg-surface-overlay/95 px-3 py-1.5 text-caption text-text-muted shadow-raised">
-            <AlertTriangle size={13} strokeWidth={1.75} aria-hidden="true" />
-            No {activeLabel?.toLowerCase()} field available for this date
+          <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-full border border-border-strong bg-surface-overlay/95 px-3 py-1.5 shadow-raised">
+            <StatusIndicator
+              status="warning"
+              label={`No ${activeLabel?.toLowerCase()} field available for this date`}
+              size="sm"
+            />
           </div>
         )}
 
@@ -800,7 +835,16 @@ export default function OceanMap({
               label={`${activeLabel} (live)`}
             />
           )}
-          <p className="text-caption text-text-disabled">{describeLayerStatus(layer, activeLabel)}</p>
+          {(() => {
+            const layerStatus = describeLayerStatus(layer, activeLabel);
+            return (
+              <StatusIndicator
+                status={layerStatus.status}
+                label={`${activeLabel} · ${layerStatus.text}`}
+                size="sm"
+              />
+            );
+          })()}
         </div>
       </div>
 
