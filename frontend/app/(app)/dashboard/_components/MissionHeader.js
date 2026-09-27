@@ -1,3 +1,5 @@
+"use client";
+
 // -----------------------------------------------------------------------------
 // NEER Dashboard — MissionHeader  (Phase 34A, refined Phase 34B)
 //
@@ -8,6 +10,14 @@
 // and model version live in SystemStatusPanel / DataContextPanel /
 // ModelContextPanel instead, so identity and live state never compete for
 // the same visual weight.
+//
+// QA (Phase 34C): marked "use client". This component passes an icon
+// component reference (`icon={RefreshCw}`) as a prop into <Button>, which is
+// itself a Client Component — a Server Component doing that fails static
+// generation for this route ("Functions cannot be passed directly to Client
+// Components ..."). Marking this file "use client" keeps it in the same
+// client subtree as Button, which resolves it without changing anything
+// about how the header renders.
 // -----------------------------------------------------------------------------
 
 import { RefreshCw, Waves } from "lucide-react";
