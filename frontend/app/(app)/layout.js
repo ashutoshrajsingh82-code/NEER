@@ -1,7 +1,9 @@
 "use client";
 
 // -----------------------------------------------------------------------------
-// NEER Application Shell — route-group layout  (Phase 32E, updated Phase 34A)
+// NEER Application Shell — route-group layout  (Phase 32E, updated Phase 34A,
+// Phase 34D wires the dashboard's point-inspection workflow into this file's
+// InspectionPanel slot)
 //
 // This is the single integration point between the generic shell
 // (components/shell) and Next.js routing: every real NEER section
@@ -22,6 +24,15 @@
 // shaped placeholder content in those same shared slots — keyed off the
 // current pathname — while every other route keeps the generic, content-free
 // placeholder from Phase 32E until its own phase defines what belongs there.
+//
+// Phase 34D: the dashboard's InspectionPanel content is now the real
+// <PointInspection> (components/inspection), not a static placeholder.
+// Split into an outer component that stands up PointInspectionProvider and
+// an inner AppShellContent that reads it, because a component can't consume
+// a context it creates in its own return statement — see
+// dashboard/_context/PointInspectionContext.js for why this state has to
+// live above both OceanMap (in page.js) and this file's InspectionPanel
+// slot in the first place.
 // -----------------------------------------------------------------------------
 
 import { useState } from "react";
@@ -29,7 +40,9 @@ import { usePathname } from "next/navigation";
 import { Compass, Gauge, Grid3x3, Satellite, Thermometer } from "lucide-react";
 import { AppShell, InspectionPanel, KPIDrawer, MainContent, Sidebar, TopNavigation } from "@/components/shell";
 import { Panel, StatusIndicator } from "@/components/ui";
-import PointInspectionPlaceholder from "./dashboard/_components/PointInspectionPlaceholder";
+import { PointInspection } from "@/components/inspection";
+import { PointInspectionProvider, usePointInspection } from "./dashboard/_context/PointInspectionContext";
+import { formatLat, formatLon } from "@/lib/oceanDomain";
 
 const MAIN_CONTENT_ID = "neer-main-content";
 
@@ -69,13 +82,33 @@ const DASHBOARD_KPIS = [
 ];
 
 export default function AppRouteGroupLayout({ children }) {
+  // The dashboard route's current date/depth/data-mode "view" — same
+  // Phase 34B/C placeholder values page.js and DataContextPanel each
+  // hardcoded independently; see PointInspectionContext.js's header
+  // comment. Harmless to provide on every route: only the dashboard's
+  // OceanMapSection/PointInspection consume it today.
+  return (
+    <PointInspectionProvider>
+      <AppShellContent>{children}</AppShellContent>
+    </PointInspectionProvider>
+  );
+}
+
+function AppShellContent({ children }) {
   const pathname = usePathname();
   const isDashboard = pathname === "/dashboard";
+  const { selectedPoint, clearSelection, dataMode, date, depth } = usePointInspection();
 
   // Starts open: on desktop/xl there is currently no in-page control to
   // reopen it once closed (a future page can add one via headerActions/a
   // toolbar button), so defaulting to open keeps the panel reachable.
   const [inspectorOpen, setInspectorOpen] = useState(true);
+
+  const inspectionSubtitle = isDashboard
+    ? selectedPoint
+      ? `${formatLat(selectedPoint.lat)}, ${formatLon(selectedPoint.lon)}`
+      : "Click the map to inspect a location"
+    : "No selection";
 
   return (
     <>
@@ -96,12 +129,18 @@ export default function AppRouteGroupLayout({ children }) {
         inspectionPanel={
           <InspectionPanel
             title={isDashboard ? "Point Inspection" : "Inspector"}
-            subtitle={isDashboard ? "Click the map to inspect a location" : "No selection"}
+            subtitle={inspectionSubtitle}
             open={inspectorOpen}
             onClose={() => setInspectorOpen(false)}
           >
             {isDashboard ? (
-              <PointInspectionPlaceholder />
+              <PointInspection
+                selectedPoint={selectedPoint}
+                date={date}
+                depth={depth}
+                dataMode={dataMode}
+                onClose={clearSelection}
+              />
             ) : (
               <Panel emphasis="raised" icon={Compass} title="Nothing selected">
                 <p className="text-small text-text-secondary">

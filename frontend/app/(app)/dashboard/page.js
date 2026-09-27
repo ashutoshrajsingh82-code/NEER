@@ -1,6 +1,7 @@
 // -----------------------------------------------------------------------------
 // NEER — /dashboard  (Phase 34A: foundation, Phase 34B: mission header +
-// system/context information, Phase 34C: interactive ocean map)
+// system/context information, Phase 34C: interactive ocean map, Phase 34D:
+// point-inspection workflow)
 //
 // Renders inside the existing (app) route-group shell — AppShell/
 // TopNavigation/Sidebar are mounted once in layout.js, and the shared
@@ -14,20 +15,21 @@
 //      (single Panel)          DataContextPanel (data mode / date / depth),
 //                              and ModelContextPanel, so live operational
 //                              state reads as one glance, not three cards
-//   3. OceanMap        — the main interactive map region (Phase 34C).
-//                         Its data-mode/date/depth props are wired to the
-//                         same values DataContextPanel/ModelContextPanel
-//                         above are showing, so the map's own context strip
-//                         always agrees with the rest of the page. Point
-//                         selection is local to the map for now — wiring a
-//                         selected grid cell into the shared InspectionPanel
-//                         (see layout.js's PointInspectionPlaceholder) is
-//                         left to whichever later phase owns that
-//                         integration.
+//   3. OceanMapSection — the main interactive map region (Phase 34C), via a
+//                         thin client wrapper (Phase 34D) that reads the
+//                         current date/depth/data-mode and selected point
+//                         from PointInspectionContext, so this page (a
+//                         Server Component — it exports `metadata` below)
+//                         doesn't itself need to call a hook. Selecting a
+//                         point here updates the same context layout.js
+//                         reads to populate the shared InspectionPanel with
+//                         <PointInspection> (Phase 34D) — see
+//                         _context/PointInspectionContext.js for why this
+//                         needed a context rather than a prop.
 // -----------------------------------------------------------------------------
 
 import { Panel } from "@/components/ui";
-import { OceanMap } from "@/components/ocean-map";
+import OceanMapSection from "./_components/OceanMapSection";
 import MissionHeader from "./_components/MissionHeader";
 import SystemStatusPanel from "./_components/SystemStatusPanel";
 import DataContextPanel from "./_components/DataContextPanel";
@@ -53,7 +55,7 @@ export default function DashboardPage() {
         />
       </Panel>
 
-      <OceanMap dataMode="reconstructed" date="2024-03-18" depth={0} />
+      <OceanMapSection />
     </div>
   );
 }
