@@ -114,11 +114,33 @@ export function PointInspectionProvider({
     [runReconstruct]
   );
 
+  // Single source of truth for "is this selection ocean, land, or outside
+  // the NEER domain" — same classification OceanMap.js already uses for its
+  // hover tooltip/coordinate readout (lib/pointClassification.js). `null`
+  // when nothing is selected. Exposed on the context below so consumers
+  // (PointInspection, DashboardKPIs) can render an explicit land/outside-
+  // domain state instead of watching a fetch that will never be made.
+  const pointStatus = useMemo(
+    () => (selectedPoint ? classifyPointLocation(selectedPoint.lat, selectedPoint.lon, isOnLand) : null),
+    [selectedPoint]
+  );
+
   const selectPoint = useCallback(
     (point) => {
       setSelectedPoint(point);
       if (point) {
-        fetchPoint(point, date, depth);
+        const status = classifyPointLocation(point.lat, point.lon, isOnLand);
+        // Land/outside-domain points aren't scientifically meaningful to
+        // reconstruct (see pointClassification.js's header comment on why
+        // GET /reconstruct itself has no notion of land) — skip the fetch
+        // entirely rather than asking the backend for a number that isn't a
+        // real ocean measurement, and reset any previous point's result so
+        // consumers don't keep showing stale data for the new selection.
+        if (isQueryablePoint(status)) {
+          fetchPoint(point, date, depth);
+        } else {
+          resetReconstruct();
+        }
       } else {
         resetReconstruct();
       }
@@ -134,21 +156,35 @@ export function PointInspectionProvider({
   // Changing the date/depth while a point is already selected re-inspects
   // the same point at the new date/depth — this is the "Date selection ->
   // ... -> KPI information" chain the phase spec describes: nobody has to
-  // re-click the map for the inspection panel/KPIs to catch up.
+  // re-click the map for the inspection panel/KPIs to catch up. A land/
+  // outside-domain selection has no date/depth-dependent fetch to re-run —
+  // date/depth changes just leave the reconstruct state reset.
   const setDate = useCallback(
     (nextDate) => {
       setDateState(nextDate);
-      if (selectedPoint) fetchPoint(selectedPoint, nextDate, depth);
+      if (selectedPoint) {
+        if (isQueryablePoint(pointStatus)) {
+          fetchPoint(selectedPoint, nextDate, depth);
+        } else {
+          resetReconstruct();
+        }
+      }
     },
-    [selectedPoint, depth, fetchPoint]
+    [selectedPoint, pointStatus, depth, fetchPoint, resetReconstruct]
   );
 
   const setDepth = useCallback(
     (nextDepth) => {
       setDepthState(nextDepth);
-      if (selectedPoint) fetchPoint(selectedPoint, date, nextDepth);
+      if (selectedPoint) {
+        if (isQueryablePoint(pointStatus)) {
+          fetchPoint(selectedPoint, date, nextDepth);
+        } else {
+          resetReconstruct();
+        }
+      }
     },
-    [selectedPoint, date, fetchPoint]
+    [selectedPoint, pointStatus, date, fetchPoint, resetReconstruct]
   );
 
   const pointInspection = useMemo(
@@ -178,8 +214,20 @@ export function PointInspectionProvider({
       depth,
       setDepth,
       pointInspection,
+      pointStatus,
     }),
-    [selectedPoint, selectPoint, clearSelection, dataMode, date, setDate, depth, setDepth, pointInspection]
+    [
+      selectedPoint,
+      selectPoint,
+      clearSelection,
+      dataMode,
+      date,
+      setDate,
+      depth,
+      setDepth,
+      pointInspection,
+      pointStatus,
+    ]
   );
 
   return <PointInspectionContext.Provider value={value}>{children}</PointInspectionContext.Provider>;
@@ -204,6 +252,7 @@ export function PointInspectionProvider({
  *     isError: boolean,
  *     retry: () => void,
  *   },
+ *   pointStatus: "ocean"|"land"|"outside_domain"|null,
  * }}
  */
 export function usePointInspection() {

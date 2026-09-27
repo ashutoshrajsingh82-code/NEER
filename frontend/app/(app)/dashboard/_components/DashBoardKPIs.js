@@ -56,6 +56,7 @@ import { metrics } from "@/lib/api";
 import { useApiRequest } from "@/lib/useApiRequest";
 import { formatDate, formatSigned } from "@/lib/format";
 import { formatDepth, formatLat, formatLon } from "@/lib/oceanDomain";
+import { describePointStatus, isQueryablePoint } from "@/lib/pointClassification";
 import { usePointInspection } from "../_context/PointInspectionContext";
 
 // Demo-only stand-ins — see the header comment above. Not derived from the
@@ -64,8 +65,27 @@ import { usePointInspection } from "../_context/PointInspectionContext";
 const DEMO_CONFIDENCE_PERCENT = 87; // matches components/inspection/PointInspection.js
 const DEMO_COVERAGE_PERCENT = 94.2;
 
-/** One point-derived KPI card, following pointInspection's own state flags. */
-function PointMetricCard({ title, icon, unit, pointInspection, extract, demo }) {
+/**
+ * One point-derived KPI card, following pointInspection's own state flags.
+ * `pointStatus` short-circuits all of that when the selection is land/
+ * outside-domain: the context never fetches for one (see
+ * PointInspectionContext.js), so pointInspection stays idle forever and,
+ * without this check, every card here would fall into the isLoading/isIdle
+ * branch below and skeleton-spin indefinitely instead of explaining why
+ * there's nothing to show.
+ */
+function PointMetricCard({ title, icon, unit, pointInspection, pointStatus, extract, demo }) {
+  if (pointStatus && !isQueryablePoint(pointStatus)) {
+    return (
+      <MetricCard
+        title={title}
+        value="--"
+        unit={unit}
+        icon={icon}
+        description={describePointStatus(pointStatus)}
+      />
+    );
+  }
   if (pointInspection.isLoading || pointInspection.isIdle) {
     return <LoadingSkeleton variant="metric" label={`Loading ${title.toLowerCase()}`} />;
   }
@@ -87,7 +107,7 @@ function PointMetricCard({ title, icon, unit, pointInspection, extract, demo }) 
 }
 
 export default function DashboardKPIs() {
-  const { selectedPoint, date, depth, pointInspection } = usePointInspection();
+  const { selectedPoint, date, depth, pointInspection, pointStatus } = usePointInspection();
 
   const {
     data: metricsData,
@@ -147,6 +167,7 @@ export default function DashboardKPIs() {
               icon={Thermometer}
               unit="°C"
               pointInspection={pointInspection}
+              pointStatus={pointStatus}
               extract={(data) => (typeof data.temperature === "number" ? data.temperature.toFixed(2) : "--")}
             />
             <PointMetricCard
@@ -154,6 +175,7 @@ export default function DashboardKPIs() {
               icon={TrendingUp}
               unit="°C"
               pointInspection={pointInspection}
+              pointStatus={pointStatus}
               extract={(data) => formatSigned(data.anomaly)}
             />
             <PointMetricCard
@@ -161,6 +183,7 @@ export default function DashboardKPIs() {
               icon={Gauge}
               unit="%"
               pointInspection={pointInspection}
+              pointStatus={pointStatus}
               demo={{ value: DEMO_CONFIDENCE_PERCENT, description: "Demo value — not yet computed by the model" }}
             />
           </>

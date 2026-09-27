@@ -4,7 +4,7 @@ import {
   classifyPointLocation,
   describePointStatus,
   isQueryablePoint,
-} from "./pointClassification";
+} from "./PointClassification";
 
 const DOMAIN = { latMin: 5, latMax: 30, lonMin: 45, lonMax: 105 };
 

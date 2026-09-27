@@ -74,7 +74,8 @@ export default function AppRouteGroupLayout({ children }) {
 function AppShellContent({ children }) {
   const pathname = usePathname();
   const isDashboard = pathname === "/dashboard";
-  const { selectedPoint, clearSelection, dataMode, date, depth, pointInspection } = usePointInspection();
+  const { selectedPoint, clearSelection, dataMode, date, depth, pointInspection, pointStatus } =
+    usePointInspection();
 
   // Starts open: on desktop/xl there is currently no in-page control to
   // reopen it once closed (a future page can add one via headerActions/a
@@ -118,6 +119,7 @@ function AppShellContent({ children }) {
                 dataMode={dataMode}
                 onClose={clearSelection}
                 reconstruction={pointInspection}
+                pointStatus={pointStatus}
               />
             ) : (
               <Panel emphasis="raised" icon={Compass} title="Nothing selected">

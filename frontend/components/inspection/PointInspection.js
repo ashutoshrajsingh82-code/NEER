@@ -47,6 +47,7 @@
 
 import {
   CalendarDays,
+  Compass,
   Database,
   Gauge,
   MapPin,
@@ -60,6 +61,7 @@ import { Badge, Button, ErrorState, LoadingSkeleton, MetricCard, Panel, StatusIn
 import { cn } from "@/lib/cn";
 import { formatDate, formatSigned } from "@/lib/format";
 import { formatDepth, formatLat, formatLon } from "@/lib/oceanDomain";
+import { POINT_STATUS, describePointStatus, isQueryablePoint } from "@/lib/pointClassification";
 
 const MODE_CONFIG = {
   reconstructed: { label: "Reconstructed", variant: "accent" },
@@ -103,6 +105,13 @@ const DEMO_INPUT_VARIABLES = [
  * }} reconstruction - the shared `reconstruct()` request state for
  *   `selectedPoint` at `date`/`depth` (Phase 34E — see
  *   PointInspectionContext.js). Ignored when `selectedPoint` is falsy.
+ * @param {"ocean"|"land"|"outside_domain"|null} [pointStatus] - the
+ *   classification of `selectedPoint` (lib/pointClassification.js, via
+ *   PointInspectionContext). A land/outside-domain point never gets a
+ *   `reconstruction` fetch (the context skips it — see its own header
+ *   comment), so this is what tells this component to render that as its
+ *   own explicit state instead of reading `reconstruction`'s perpetually
+ *   idle isLoading/isIdle flags as "still loading".
  */
 export default function PointInspection({
   selectedPoint,
@@ -111,6 +120,7 @@ export default function PointInspection({
   dataMode = "reconstructed",
   onClose,
   reconstruction,
+  pointStatus,
   className,
 }) {
   // --- Empty state (Requirement 6) ----------------------------------------
@@ -176,6 +186,33 @@ export default function PointInspection({
       Clear selection
     </Button>
   );
+
+  // --- Land / outside-domain state ----------------------------------------
+  // Distinct from loading/error/success: the context deliberately never
+  // fetches for a non-queryable point (see PointInspectionContext.js's
+  // selectPoint/setDate/setDepth), so `reconstruction` stays idle forever
+  // for one — without this check that idle state would fall through to the
+  // loading branch below and spin indefinitely instead of explaining why.
+  if (pointStatus && !isQueryablePoint(pointStatus)) {
+    return (
+      <div className={cn("flex flex-col gap-4", className)}>
+        {coordinateHeader}
+        <Panel
+          emphasis="base"
+          icon={Compass}
+          title={pointStatus === POINT_STATUS.LAND ? "Land" : "Outside domain"}
+          bodyClassName="flex flex-col gap-3"
+        >
+          <StatusIndicator status="warning" label={describePointStatus(pointStatus)} size="sm" />
+          <p className="text-small text-text-secondary">
+            This grid cell can&apos;t be reconstructed — pick an ocean point inside the NEER
+            domain to inspect it.
+          </p>
+        </Panel>
+        {clearSelectionButton}
+      </div>
+    );
+  }
 
   // --- Loading state (Requirement 5) --------------------------------------
   if (isLoading || isIdle) {
