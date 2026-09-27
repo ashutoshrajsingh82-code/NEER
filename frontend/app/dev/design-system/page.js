@@ -22,6 +22,7 @@ import {
   Sparkles,
   Thermometer,
 } from "lucide-react";
+
 import {
   Badge,
   Button,
@@ -57,14 +58,34 @@ function Section({ title, description, children }) {
     <section className="flex flex-col gap-4">
       <div>
         <h2 className="text-h2 text-text-primary">{title}</h2>
-        {description && <p className="mt-1 text-small text-text-muted">{description}</p>}
+
+        {description && (
+          <p className="mt-1 text-small text-text-muted">{description}</p>
+        )}
       </div>
+
       {children}
     </section>
   );
 }
 
 export default function DesignSystemPlayground() {
+  // ---------------------------------------------------------------------------
+  // Hooks MUST always run before any conditional return.
+  // ---------------------------------------------------------------------------
+
+  const [activeTab, setActiveTab] = useState("overview");
+  const [depth, setDepth] = useState("thermocline");
+  const [region, setRegion] = useState("");
+  const [threshold, setThreshold] = useState(2.5);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [loadingDemo, setLoadingDemo] = useState(false);
+
+  // ---------------------------------------------------------------------------
+  // Development-only guard.
+  // ---------------------------------------------------------------------------
+
   if (process.env.NODE_ENV === "production") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg-base px-6 text-center">
@@ -75,53 +96,77 @@ export default function DesignSystemPlayground() {
     );
   }
 
-  const [activeTab, setActiveTab] = useState("overview");
-  const [depth, setDepth] = useState("thermocline");
-  const [region, setRegion] = useState("");
-  const [threshold, setThreshold] = useState(2.5);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [loadingDemo, setLoadingDemo] = useState(false);
-
   return (
     <div className="min-h-screen bg-bg-base bg-grid-subtle bg-grid px-6 py-10 text-text-primary sm:px-10">
       <div className="mx-auto flex max-w-6xl flex-col gap-12">
+        {/* ----------------------------------------------------------------- */}
+        {/* Header                                                            */}
+        {/* ----------------------------------------------------------------- */}
+
         <header>
           <Badge variant="accent">Development only</Badge>
-          <h1 className="mt-3 text-display text-text-primary">NEER Design System Playground</h1>
+
+          <h1 className="mt-3 text-display text-text-primary">
+            NEER Design System Playground
+          </h1>
+
           <p className="mt-2 max-w-2xl text-body text-text-muted">
-            Every component from Phases 31A–31D, with their major variants, loading and error
-            states, disabled states, and interactive behavior — for visual QA only.
+            Every component from Phases 31A–31D, with their major variants,
+            loading and error states, disabled states, and interactive
+            behavior — for visual QA only.
           </p>
         </header>
 
-        {/* Buttons & Badges ------------------------------------------------ */}
-        <Section title="Button" description="Variants, sizes, icons, loading and disabled states.">
+        {/* ----------------------------------------------------------------- */}
+        {/* Buttons & Badges                                                  */}
+        {/* ----------------------------------------------------------------- */}
+
+        <Section
+          title="Button"
+          description="Variants, sizes, icons, loading and disabled states."
+        >
           <div className="flex flex-wrap items-center gap-3">
             <Button variant="primary">Primary</Button>
+
             <Button variant="secondary">Secondary</Button>
+
             <Button variant="ghost">Ghost</Button>
+
             <Button variant="danger">Danger</Button>
+
             <Button variant="primary" loading>
               Loading
             </Button>
+
             <Button variant="primary" disabled>
               Disabled
             </Button>
+
             <Button variant="secondary" icon={Settings}>
               With icon
             </Button>
-            <Button variant="ghost" iconOnly icon={Settings} aria-label="Settings" />
+
+            <Button
+              variant="ghost"
+              iconOnly
+              icon={Settings}
+              aria-label="Settings"
+            />
+
             <Button variant="primary" size="sm">
               Small
             </Button>
+
             <Button variant="primary" size="lg">
               Large
             </Button>
           </div>
         </Section>
 
-        <Section title="Badge" description="Semantic and scientific/data-status variants.">
+        <Section
+          title="Badge"
+          description="Semantic and scientific/data-status variants."
+        >
           <div className="flex flex-wrap gap-2">
             <Badge>Default</Badge>
             <Badge variant="success">Success</Badge>
@@ -133,7 +178,10 @@ export default function DesignSystemPlayground() {
           </div>
         </Section>
 
-        <Section title="StatusIndicator" description="Live system/instrument states.">
+        <Section
+          title="StatusIndicator"
+          description="Live system/instrument states."
+        >
           <div className="flex flex-wrap gap-5">
             <StatusIndicator status="online" />
             <StatusIndicator status="processing" />
@@ -144,38 +192,79 @@ export default function DesignSystemPlayground() {
           </div>
         </Section>
 
-        {/* Layout ------------------------------------------------------------ */}
-        <Section title="Panel" description="Emphasis levels and header/footer composition.">
+        {/* ----------------------------------------------------------------- */}
+        {/* Layout                                                            */}
+        {/* ----------------------------------------------------------------- */}
+
+        <Section
+          title="Panel"
+          description="Emphasis levels and header/footer composition."
+        >
           <div className="grid gap-4 sm:grid-cols-2">
-            <Panel title="Base panel" subtitle="emphasis=&quot;base&quot;" icon={Gauge}>
-              <p className="text-small text-text-secondary">Standard control-center card.</p>
+            <Panel
+              title="Base panel"
+              subtitle='emphasis="base"'
+              icon={Gauge}
+            >
+              <p className="text-small text-text-secondary">
+                Standard control-center card.
+              </p>
             </Panel>
+
             <Panel
               title="Raised panel"
-              subtitle="emphasis=&quot;raised&quot;"
+              subtitle='emphasis="raised"'
               emphasis="raised"
-              headerActions={<Button size="sm" variant="ghost">Action</Button>}
-              footer={<p className="text-caption text-text-muted">Footer content</p>}
+              headerActions={
+                <Button size="sm" variant="ghost">
+                  Action
+                </Button>
+              }
+              footer={
+                <p className="text-caption text-text-muted">
+                  Footer content
+                </p>
+              }
             >
-              <p className="text-small text-text-secondary">With header action and footer.</p>
+              <p className="text-small text-text-secondary">
+                With header action and footer.
+              </p>
             </Panel>
           </div>
         </Section>
 
-        <Section title="Tabs" description="Keyboard-navigable, animated active indicator, disabled tab.">
-          <Tabs id="playground-tabs" items={TAB_ITEMS} value={activeTab} onChange={setActiveTab} />
+        <Section
+          title="Tabs"
+          description="Keyboard-navigable, animated active indicator, disabled tab."
+        >
+          <Tabs
+            id="playground-tabs"
+            items={TAB_ITEMS}
+            value={activeTab}
+            onChange={setActiveTab}
+          />
+
           <div
             role="tabpanel"
             id={`playground-tabs-panel-${activeTab}`}
             aria-labelledby={`playground-tabs-tab-${activeTab}`}
             className="pt-4 text-small text-text-secondary"
           >
-            Active tab: <span className="font-mono text-accent-300">{activeTab}</span>
+            Active tab:{" "}
+            <span className="font-mono text-accent-300">
+              {activeTab}
+            </span>
           </div>
         </Section>
 
-        {/* Inputs ------------------------------------------------------------ */}
-        <Section title="Slider" description="Scientific numeric control with custom formatting.">
+        {/* ----------------------------------------------------------------- */}
+        {/* Inputs                                                            */}
+        {/* ----------------------------------------------------------------- */}
+
+        <Section
+          title="Slider"
+          description="Scientific numeric control with custom formatting."
+        >
           <div className="grid gap-6 sm:grid-cols-2">
             <Slider
               label="Anomaly threshold"
@@ -186,11 +275,21 @@ export default function DesignSystemPlayground() {
               onChange={setThreshold}
               unit="°C"
             />
-            <Slider label="Disabled example" min={0} max={100} value={40} disabled />
+
+            <Slider
+              label="Disabled example"
+              min={0}
+              max={100}
+              value={40}
+              disabled
+            />
           </div>
         </Section>
 
-        <Section title="Select" description="Keyboard-accessible dropdown with icon and error state.">
+        <Section
+          title="Select"
+          description="Keyboard-accessible dropdown with icon and error state."
+        >
           <div className="grid gap-6 sm:grid-cols-2">
             <Select
               label="Depth layer"
@@ -200,10 +299,16 @@ export default function DesignSystemPlayground() {
               value={depth}
               onChange={setDepth}
             />
+
             <Select
               label="Region (required)"
               placeholder="Choose a region…"
-              options={[{ value: "arabian-sea", label: "Arabian Sea" }]}
+              options={[
+                {
+                  value: "arabian-sea",
+                  label: "Arabian Sea",
+                },
+              ]}
               value={region}
               onChange={setRegion}
               error={!region ? "A region must be selected." : undefined}
@@ -211,13 +316,26 @@ export default function DesignSystemPlayground() {
           </div>
         </Section>
 
-        {/* Overlays ------------------------------------------------------------ */}
-        <Section title="Modal, Drawer & Tooltip" description="Backdrop, focus trap, escape-to-close, positioning.">
+        {/* ----------------------------------------------------------------- */}
+        {/* Overlays                                                          */}
+        {/* ----------------------------------------------------------------- */}
+
+        <Section
+          title="Modal, Drawer & Tooltip"
+          description="Backdrop, focus trap, escape-to-close, positioning."
+        >
           <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={() => setModalOpen(true)}>Open modal</Button>
-            <Button variant="secondary" onClick={() => setDrawerOpen(true)}>
+            <Button onClick={() => setModalOpen(true)}>
+              Open modal
+            </Button>
+
+            <Button
+              variant="secondary"
+              onClick={() => setDrawerOpen(true)}
+            >
               Open drawer
             </Button>
+
             <Tooltip content="Rendered with hover, focus and a short delay">
               <Button variant="ghost">Hover or focus me</Button>
             </Tooltip>
@@ -230,23 +348,44 @@ export default function DesignSystemPlayground() {
             description="Demonstrates focus trapping and escape-to-close."
             footer={
               <>
-                <Button variant="ghost" onClick={() => setModalOpen(false)}>
+                <Button
+                  variant="ghost"
+                  onClick={() => setModalOpen(false)}
+                >
                   Cancel
                 </Button>
-                <Button onClick={() => setModalOpen(false)}>Confirm</Button>
+
+                <Button onClick={() => setModalOpen(false)}>
+                  Confirm
+                </Button>
               </>
             }
           >
-            <p className="text-small text-text-secondary">Modal body content goes here.</p>
+            <p className="text-small text-text-secondary">
+              Modal body content goes here.
+            </p>
           </Modal>
 
-          <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} position="right" title="Example drawer">
-            <p className="text-small text-text-secondary">Drawer body content goes here.</p>
+          <Drawer
+            open={drawerOpen}
+            onClose={() => setDrawerOpen(false)}
+            position="right"
+            title="Example drawer"
+          >
+            <p className="text-small text-text-secondary">
+              Drawer body content goes here.
+            </p>
           </Drawer>
         </Section>
 
-        {/* Data & feedback ------------------------------------------------------------ */}
-        <Section title="MetricCard" description="Generic metric display — not tied to any specific measurement.">
+        {/* ----------------------------------------------------------------- */}
+        {/* Data & Feedback                                                   */}
+        {/* ----------------------------------------------------------------- */}
+
+        <Section
+          title="MetricCard"
+          description="Generic metric display — not tied to any specific measurement."
+        >
           <div className="grid gap-4 sm:grid-cols-3">
             <MetricCard
               title="Sea Surface Temp"
@@ -254,18 +393,30 @@ export default function DesignSystemPlayground() {
               unit="°C"
               icon={Thermometer}
               status="online"
-              trend={{ direction: "up", value: "+0.3°C" }}
+              trend={{
+                direction: "up",
+                value: "+0.3°C",
+              }}
               description="vs. 7-day mean"
             />
+
             <MetricCard
               title="Model RMSE"
               value="0.142"
               icon={Activity}
               status="warning"
-              trend={{ direction: "up", value: "+0.008", tone: "negative" }}
+              trend={{
+                direction: "up",
+                value: "+0.008",
+                tone: "negative",
+              }}
               description="Reconstruction error"
-              secondaryValue={{ label: "MAE", value: "0.098" }}
+              secondaryValue={{
+                label: "MAE",
+                value: "0.098",
+              }}
             />
+
             <MetricCard
               title="Salinity"
               value="35.1"
@@ -277,42 +428,77 @@ export default function DesignSystemPlayground() {
           </div>
         </Section>
 
-        <Section title="ChartContainer" description="Layout shell with loading, empty and fullscreen states.">
+        <Section
+          title="ChartContainer"
+          description="Layout shell with loading, empty and fullscreen states."
+        >
           <div className="grid gap-4 sm:grid-cols-2">
             <ChartContainer
               title="Depth profile"
               subtitle="Last 30 days"
               allowFullscreen
-              legend={<span className="text-caption text-text-muted">Legend goes here</span>}
+              legend={
+                <span className="text-caption text-text-muted">
+                  Legend goes here
+                </span>
+              }
             >
               <div className="flex h-40 items-center justify-center rounded-md border border-dashed border-border text-caption text-text-muted">
                 Chart content placeholder
               </div>
             </ChartContainer>
-            <ChartContainer title="Loading example" loading />
+
+            <ChartContainer
+              title="Loading example"
+              loading
+            />
           </div>
-          <ChartContainer title="Empty example" empty emptyMessage="No readings for this date range." />
+
+          <ChartContainer
+            title="Empty example"
+            empty
+            emptyMessage="No readings for this date range."
+          />
         </Section>
 
-        <Section title="LoadingSkeleton" description="Six variants, all with a subtle pulse animation.">
+        <Section
+          title="LoadingSkeleton"
+          description="Six variants, all with a subtle pulse animation."
+        >
           <div className="grid gap-4 sm:grid-cols-3">
             <LoadingSkeleton variant="metric" />
             <LoadingSkeleton variant="card" />
             <LoadingSkeleton variant="panel" />
           </div>
+
           <div className="grid gap-4 sm:grid-cols-2">
-            <LoadingSkeleton variant="list" count={3} />
-            <LoadingSkeleton variant="text" lines={4} />
+            <LoadingSkeleton
+              variant="list"
+              count={3}
+            />
+
+            <LoadingSkeleton
+              variant="text"
+              lines={4}
+            />
           </div>
         </Section>
 
-        <Section title="ErrorState" description="Retry action and collapsible technical details.">
+        <Section
+          title="ErrorState"
+          description="Retry action and collapsible technical details."
+        >
           <div className="grid gap-4 sm:grid-cols-2">
-            <ErrorState onRetry={() => setLoadingDemo((v) => !v)} />
+            <ErrorState
+              onRetry={() => setLoadingDemo((value) => !value)}
+            />
+
             <ErrorState
               title="Failed to fetch reconstruction output"
               message="The model service did not respond in time."
-              details={"Error: timeout after 30000ms\n  at fetchReconstruction (client.js:42)"}
+              details={
+                "Error: timeout after 30000ms\n  at fetchReconstruction (client.js:42)"
+              }
             />
           </div>
         </Section>
@@ -320,3 +506,4 @@ export default function DesignSystemPlayground() {
     </div>
   );
 }
+

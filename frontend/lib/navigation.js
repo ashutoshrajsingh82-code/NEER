@@ -38,7 +38,7 @@ export const NAV_ITEMS = [
   { value: "vertical-profile", label: "Vertical Profile", href: "/vertical-profile", icon: MoveVertical },
   { value: "hovmoller", label: "Hovmöller", href: "/hovmoller", icon: AreaChart },
   { value: "3d-ocean", label: "3D Ocean", href: "/3d-ocean", icon: Box },
-  { value: "embedding-explorer", label: "Embedding Explorer", href: "/embedding-explorer", icon: Network },
+  { value: "embedding-explorer", label: "Embedding Explorer", href: "/embedding", icon: Network },
   { value: "explainability", label: "Explainability", href: "/explainability", icon: Lightbulb },
   { value: "evaluation", label: "Evaluation", href: "/evaluation", icon: ClipboardCheck },
   { value: "data-quality", label: "Data Quality", href: "/data-quality", icon: ShieldCheck },

@@ -9,9 +9,19 @@
 
 import { cn } from "@/lib/cn";
 
-export default function MainContent({ children, className }) {
+export default function MainContent({ id, children, className, ...props }) {
   return (
-    <main className={cn("flex-1 overflow-y-auto bg-grid-subtle bg-grid px-6 py-6", className)}>
+    <main
+      id={id}
+      // tabIndex(-1) lets a skip link (see AppShell's route-group layout)
+      // move focus here directly, even though <main> isn't natively focusable.
+      tabIndex={-1}
+      className={cn(
+        "flex-1 overflow-y-auto bg-grid-subtle bg-grid px-6 py-6 focus:outline-none",
+        className
+      )}
+      {...props}
+    >
       {children}
     </main>
   );
