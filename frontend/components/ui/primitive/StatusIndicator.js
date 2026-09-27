@@ -1,3 +1,5 @@
+"use client";
+
 // -----------------------------------------------------------------------------
 // NEER Design System — StatusIndicator
 //
@@ -9,6 +11,13 @@
 // copy of components/ui/index.js) instead of the actual component, which
 // silently broke every consumer (MetricCard's `status` prop, TopNavigation's
 // live indicator, the design-system preview). Restored here.
+//
+// QA: this file used `motion.span` (framer-motion) without a "use client"
+// directive — the same class of Server/Client boundary bug MissionHeader.js
+// hit in Phase 34A/B. Because SystemStatusPanel (a Server Component) renders
+// this directly on /dashboard, Next.js failed to prerender the page with
+// "Could not find module '.../framer-motion/dist/es/index.mjs#motion#span'
+// in the React Client Manifest." Fixed by adding the directive here.
 // -----------------------------------------------------------------------------
 
 import { cn } from "@/lib/cn";
