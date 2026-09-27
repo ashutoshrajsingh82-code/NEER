@@ -3,3 +3,7 @@ export { useOceanMapLayer, LAYER_SUPPORT, MAX_GRID_POINTS } from "./useOceanMapL
 export { default as TemperatureLayer } from "./TemperatureLayer";
 export { default as TemperatureLegend } from "./TemperatureLegend";
 export { default as GridOverlay } from "./GridOverlay";
+export { default as MapControls } from "./MapControls";
+export { default as MapLegend } from "./MapLegend";
+export { default as LayerToggle } from "./LayerToggle";
+export { default as CoordinateDisplay } from "./CoordinateDisplay";

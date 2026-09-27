@@ -65,11 +65,11 @@ import {
   Database,
   Droplets,
   Layers,
+  LayoutGrid,
   Maximize2,
   Minimize2,
   MoveVertical,
   Navigation,
-  RotateCcw,
   Thermometer,
   TrendingUp,
   Waves,
@@ -97,10 +97,12 @@ import {
   snapToGrid,
 } from "@/lib/oceanDomain";
 import { POINT_STATUS, classifyPointLocation, describePointStatus } from "@/lib/pointClassification";
+import CoordinateDisplay from "./CoordinateDisplay";
 import GridOverlay from "./GridOverlay";
 import { LANDMASSES, VIEW_BOX, isOnLand, project, unproject } from "./landmask";
+import MapControls from "./MapControls";
+import MapLegend from "./MapLegend";
 import TemperatureLayer from "./TemperatureLayer";
-import TemperatureLegend from "./TemperatureLegend";
 import { useOceanMapLayer } from "./useOceanMapLayer";
 
 // Variable/layer tabs — the four with real interaction wired (sst/sss/
@@ -159,43 +161,6 @@ function clientToViewBox(clientX, clientY, rect) {
     x: (clientX - rect.left - offsetX) / pxPerUnit,
     y: (clientY - rect.top - offsetY) / pxPerUnit,
   };
-}
-
-/**
- * Turns a useOceanMapLayer() result into the legend's one-line status text
- * plus a StatusIndicator status key, so every layer state (unsupported,
- * too-large-a-region, loading, errored, missing-data, or live) reads with
- * the same online/processing/warning/error/offline vocabulary the rest of
- * the design system uses instead of bespoke per-layer wording.
- */
-function describeLayerStatus(layer, activeLabel) {
-  if (!layer.supported) {
-    return { status: "offline", text: `${layer.reason} — demo interaction only` };
-  }
-  if (layer.tooLargeForCellLimit) {
-    return {
-      status: "warning",
-      text: "Zoom in to load live grid data (visible region too large for one request)",
-    };
-  }
-  if (layer.isLoading) {
-    return { status: "processing", text: "Loading live grid data…" };
-  }
-  if (layer.isError) {
-    return { status: "error", text: `Grid request failed — ${layer.error?.message ?? "unknown error"}` };
-  }
-  if (layer.values) {
-    const rows = layer.grid?.lat?.length ?? 0;
-    const cols = layer.grid?.lon?.length ?? 0;
-    return { status: "online", text: `Live grid loaded (${rows}×${cols} cells)` };
-  }
-  if (layer.status === "success") {
-    return {
-      status: "warning",
-      text: `No ${activeLabel?.toLowerCase()} data for this date/depth — missing, not fabricated`,
-    };
-  }
-  return { status: "unknown", text: "No date selected — demo interaction only" };
 }
 
 /**
@@ -272,7 +237,6 @@ export default function OceanMap({
   // `clientToViewBox` already did for this exact event.
   const [hoverScreenPos, setHoverScreenPos] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [controlsOpen, setControlsOpen] = useState(false);
   const [layerVisibility, setLayerVisibility] = useState({
     graticule: true,
     scientificGrid: true,
@@ -434,19 +398,6 @@ export default function OceanMap({
     }
   }
 
-  // Close the compact layer-controls popover on outside click.
-  const controlsRef = useRef(null);
-  useEffect(() => {
-    if (!controlsOpen) return undefined;
-    function handleOutside(event) {
-      if (controlsRef.current && !controlsRef.current.contains(event.target)) {
-        setControlsOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleOutside);
-    return () => document.removeEventListener("mousedown", handleOutside);
-  }, [controlsOpen]);
-
   function toggleLayer(key) {
     setLayerVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
   }
@@ -520,8 +471,6 @@ export default function OceanMap({
     hover.lon >= OCEAN_DOMAIN.lonMin - 2 &&
     hover.lon <= OCEAN_DOMAIN.lonMax + 2;
 
-  const readoutLat = hover ? formatLat(hover.lat) : activeSelected ? formatLat(activeSelected.lat) : "--.--°";
-  const readoutLon = hover ? formatLon(hover.lon) : activeSelected ? formatLon(activeSelected.lon) : "--.--°";
   const readoutPoint = hover ?? activeSelected ?? null;
   const readoutStatus = hover ? hoverStatus : selectedStatus;
   const readoutValue = lookupFieldValue(layer.grid, layer.values, readoutPoint);
@@ -546,6 +495,54 @@ export default function OceanMap({
   const hoverAnomaly =
     hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(layer.grid, layer.anomalyValues, hover) : null;
 
+  // MapControls' primary, spec-required toggles. Both the temperature and
+  // anomaly rows share the same `layerVisibility.temperatureField` flag —
+  // there is exactly one backend-driven field on screen at a time, whichever
+  // variable tab is active (see useOceanMapLayer.js) — so the row for the
+  // *inactive* one of the pair is disabled with an explanatory tooltip
+  // rather than pretending it independently controls a second, simultaneous
+  // field the data model doesn't have.
+  const mapControlLayers = [
+    {
+      key: "temperature-field",
+      icon: Thermometer,
+      label: "Temperature layer",
+      description: "Sea-surface temperature field",
+      active: layerVisibility.temperatureField,
+      disabled: activeVariable !== "sst",
+      disabledReason: 'Switch to the "Sea Surface Temp." tab to control this layer',
+      onToggle: () => toggleLayer("temperatureField"),
+    },
+    {
+      key: "anomaly-field",
+      icon: TrendingUp,
+      label: "Temperature anomaly layer",
+      description: "Temperature minus climatology",
+      active: layerVisibility.temperatureField,
+      disabled: activeVariable !== "anomaly",
+      disabledReason: 'Switch to the "Anomaly" tab to control this layer',
+      onToggle: () => toggleLayer("temperatureField"),
+    },
+    {
+      key: "scientific-grid",
+      icon: LayoutGrid,
+      label: "0.25° scientific grid",
+      description: "NEER native grid resolution overlay",
+      active: layerVisibility.scientificGrid,
+      onToggle: () => toggleLayer("scientificGrid"),
+    },
+  ];
+
+  // Earlier phases' base-map chrome — kept togglable, grouped separately so
+  // the popover reads "the scientific layers you asked for" first and "the
+  // rest of the map's chrome" second, rather than one flat undifferentiated
+  // list.
+  const mapBaseLayers = [
+    { key: "graticule", icon: Compass, label: "Graticule & labels", active: layerVisibility.graticule },
+    { key: "coastline", icon: Waves, label: "Coastline", active: layerVisibility.coastline },
+    { key: "domainBoundary", icon: Database, label: "Domain boundary", active: layerVisibility.domainBoundary },
+  ].map((item) => ({ ...item, onToggle: () => toggleLayer(item.key) }));
+
   return (
     <Panel
       emphasis="raised"
@@ -555,13 +552,6 @@ export default function OceanMap({
       bodyClassName="flex flex-col gap-4"
       headerActions={
         <div className="hidden items-center gap-1 sm:flex">
-          <ToolbarButton
-            icon={Layers}
-            label="Map layer controls"
-            active={controlsOpen}
-            onClick={() => setControlsOpen((prev) => !prev)}
-          />
-          <ToolbarButton icon={RotateCcw} label="Reset view" onClick={resetView} />
           <ToolbarButton
             icon={isFullscreen ? Minimize2 : Maximize2}
             label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
@@ -775,38 +765,12 @@ export default function OceanMap({
           </g>
         </svg>
 
-        {/* Compact layer-controls popover */}
-        {controlsOpen && (
-          <div
-            ref={controlsRef}
-            className="absolute left-3 top-3 z-raised flex w-48 flex-col gap-1 rounded-md border border-border-strong bg-surface-overlay p-2.5 shadow-raised"
-          >
-            <p className="px-1 pb-1 text-caption uppercase tracking-widest text-text-muted">Map layers</p>
-            {[
-              { key: "temperatureField", label: `${activeLabel} field` },
-              { key: "graticule", label: "Graticule & labels" },
-              { key: "scientificGrid", label: "Scientific grid (0.25°, on zoom)" },
-              { key: "coastline", label: "Coastline" },
-              { key: "domainBoundary", label: "Domain boundary" },
-            ].map((item) => (
-              <label
-                key={item.key}
-                className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-1.5 py-1 text-small text-text-secondary hover:bg-surface-raised"
-              >
-                {item.label}
-                <input
-                  type="checkbox"
-                  checked={layerVisibility[item.key]}
-                  onChange={() => toggleLayer(item.key)}
-                  className="h-3.5 w-3.5 accent-accent-400"
-                />
-              </label>
-            ))}
-            <p className="mt-1 border-t border-border-subtle px-1 pt-1.5 text-caption text-text-disabled">
-              Reserved for future layers: SSS, SSH/SLA, currents, winds, subsurface temp., uncertainty.
-            </p>
-          </div>
-        )}
+        {/* Layer controls — temperature/anomaly/grid visibility + reset,
+            grouped behind one compact trigger (MapControls) so the map
+            surface itself stays uncluttered. */}
+        <div className="absolute left-3 top-3">
+          <MapControls layers={mapControlLayers} baseLayers={mapBaseLayers} onReset={resetView} />
+        </div>
 
         {/* Zoom controls */}
         <div className="absolute right-3 top-3 flex flex-col gap-1">
@@ -953,32 +917,20 @@ export default function OceanMap({
             </span>
           </div>
 
-          {colorConfig && fieldExtent && layerVisibility.temperatureField && (
-            <TemperatureLegend
-              kind={colorConfig.kind}
-              sample={legendSample}
-              extent={fieldExtent}
-              unit={colorConfig.unit}
-              label={`${activeLabel} (live)`}
-            />
-          )}
-          {(() => {
-            const layerStatus = describeLayerStatus(layer, activeLabel);
-            return (
-              <StatusIndicator
-                status={layerStatus.status}
-                label={`${activeLabel} · ${layerStatus.text}`}
-                size="sm"
-              />
-            );
-          })()}
+          <MapLegend
+            activeLabel={activeLabel}
+            colorConfig={colorConfig}
+            sample={legendSample}
+            extent={fieldExtent}
+            layer={layer}
+            fieldVisible={layerVisibility.temperatureField}
+          />
         </div>
       </div>
 
       {/* Coordinate readout */}
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1 border-t border-border-subtle pt-3 text-caption font-mono text-text-muted">
-        <span>LAT {readoutLat}</span>
-        <span>LON {readoutLon}</span>
+        <CoordinateDisplay lat={readoutPoint?.lat} lon={readoutPoint?.lon} />
         <span>DEPTH {depth} m</span>
         <span>VALUE {readoutValueText}</span>
         {(hover || activeSelected) && readoutStatus && (

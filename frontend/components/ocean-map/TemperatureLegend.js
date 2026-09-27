@@ -37,6 +37,7 @@ export default function TemperatureLegend({ kind, sample, extent, unit = "", lab
   }, [kind, sample]);
 
   const midLabel = kind === "diverging" ? "0" : ((extent.min + extent.max) / 2).toFixed(1);
+  const isDiverging = kind === "diverging";
 
   return (
     <div className="flex flex-col gap-1">
@@ -56,6 +57,20 @@ export default function TemperatureLegend({ kind, sample, extent, unit = "", lab
         <span>{midLabel}{unit}</span>
         <span>{extent.max.toFixed(1)}{unit}</span>
       </div>
+      {/* Diverging fields (anomaly) get an explicit sign legend — the
+          numeric min/max row above already carries the real values, but a
+          signed field's most important read is "warmer or cooler than
+          climatology", which a colorbar alone doesn't spell out. */}
+      {isDiverging && (
+        <div className="flex justify-between text-caption" style={{ width: 120 }}>
+          <span className="flex items-center gap-1 text-[#67A9CF]">
+            <span aria-hidden="true">−</span> cooler
+          </span>
+          <span className="flex items-center gap-1 text-[#EF8A62]">
+            warmer <span aria-hidden="true">+</span>
+          </span>
+        </div>
+      )}
     </div>
   );
 }
