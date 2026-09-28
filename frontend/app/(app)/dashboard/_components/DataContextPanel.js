@@ -13,12 +13,21 @@
 //
 // Phase 34B scope: display + local, self-contained navigation only — no
 // connection yet to any reconstructed field, map, or point-inspection logic.
+//
+// Phase 36A: this panel is now driven by backend state (see
+// DataContextSection.js / DateDepthContext.js). It no longer invents a
+// default date: `date` is a "YYYY-MM-DD" string or null, and previous/next
+// step through the dates the backend actually lists (`onStepDate`) rather
+// than adding ±1 calendar day, which would request dates that don't exist.
+// Not the final visual controls — just honest wiring: loading / empty /
+// error captions, disabled-at-the-ends stepping, and the backend depth list.
 // -----------------------------------------------------------------------------
 
 import { useState } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight, Database, MoveVertical } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Badge, Button } from "@/components/ui";
+import { formatDate } from "@/lib/format";
 
 const MODE_CONFIG = {
   reconstructed: { label: "Reconstructed", variant: "accent" },
@@ -26,47 +35,47 @@ const MODE_CONFIG = {
   blended: { label: "Blended", variant: "warning" },
 };
 
-const DEFAULT_DEPTH_LEVELS = [
-  { label: "Surface", value: 0 },
-  { label: "50 m", value: 50 },
-  { label: "200 m", value: 200 },
-  { label: "500 m", value: 500 },
-];
-
-const DATE_FORMAT = { day: "2-digit", month: "short", year: "numeric" };
+// No built-in depth list: levels come from the backend (GET /model/info) via
+// DataContextSection — an invented default here would be a second, unvalidated
+// source of truth for what depths exist.
+const DEFAULT_DEPTH_LEVELS = [];
 
 /**
  * @param {"reconstructed"|"observed"|"blended"} dataMode
- * @param {Date|string} date - controlled selected date; falls back to internal state
- * @param {(date: Date) => void} onDateChange
- * @param {{label: string, value: number}[]} depthLevels
- * @param {number} depth - controlled selected depth value; falls back to internal state
+ * @param {string|null} date - selected "YYYY-MM-DD" date; null when none is available
+ * @param {(delta: number) => void} onStepDate - step to the previous (-1) / next (+1) AVAILABLE date
+ * @param {boolean} canStepPrev
+ * @param {boolean} canStepNext
+ * @param {"loading"|"success"|"empty"|"error"} datesStatus
+ * @param {string} [datesMessage] - short explanation shown when datesStatus is "empty"/"error"
+ * @param {() => void} [onRetryDates]
+ * @param {{label: string, value: number}[]} depthLevels - the backend-provided levels
+ * @param {number|null} depth - selected depth value
  * @param {(value: number) => void} onDepthChange
+ * @param {"loading"|"success"|"error"} depthsStatus
+ * @param {string} [depthsMessage] - caption shown when the depth list is a fallback / differs from expected
  */
 export default function DataContextPanel({
   dataMode = "reconstructed",
   date,
-  onDateChange,
+  onStepDate,
+  canStepPrev = false,
+  canStepNext = false,
+  datesStatus = "success",
+  datesMessage,
+  onRetryDates,
   depthLevels = DEFAULT_DEPTH_LEVELS,
   depth,
   onDepthChange,
+  depthsStatus = "success",
+  depthsMessage,
   className,
 }) {
-  const [internalDate, setInternalDate] = useState(() => (date ? new Date(date) : new Date(2024, 2, 18)));
-  const [internalDepth, setInternalDepth] = useState(depth ?? depthLevels[0]?.value ?? 0);
+  const [internalDepth, setInternalDepth] = useState(depth ?? depthLevels[0]?.value ?? null);
 
-  const isDateControlled = date !== undefined;
-  const activeDate = isDateControlled ? new Date(date) : internalDate;
   const isDepthControlled = depth !== undefined;
   const activeDepth = isDepthControlled ? depth : internalDepth;
   const modeConfig = MODE_CONFIG[dataMode] ?? MODE_CONFIG.reconstructed;
-
-  function shiftDate(days) {
-    const next = new Date(activeDate);
-    next.setDate(next.getDate() + days);
-    if (!isDateControlled) setInternalDate(next);
-    onDateChange?.(next);
-  }
 
   function selectDepth(value) {
     if (!isDepthControlled) setInternalDepth(value);
@@ -101,21 +110,39 @@ export default function DataContextPanel({
               size="sm"
               iconOnly
               icon={ChevronLeft}
-              aria-label="Previous day"
-              onClick={() => shiftDate(-1)}
+              aria-label="Previous available date"
+              disabled={!canStepPrev}
+              onClick={() => onStepDate?.(-1)}
             />
             <span className="whitespace-nowrap font-mono text-small text-text-primary">
-              {activeDate.toLocaleDateString("en-GB", DATE_FORMAT)}
+              {date
+                ? formatDate(date)
+                : datesStatus === "loading"
+                  ? "Loading dates…"
+                  : datesStatus === "empty"
+                    ? "No dates available"
+                    : "Dates unavailable"}
             </span>
             <Button
               variant="ghost"
               size="sm"
               iconOnly
               icon={ChevronRight}
-              aria-label="Next day"
-              onClick={() => shiftDate(1)}
+              aria-label="Next available date"
+              disabled={!canStepNext}
+              onClick={() => onStepDate?.(1)}
             />
           </div>
+          {(datesStatus === "error" || datesStatus === "empty") && (
+            <p className="mt-0.5 flex items-center gap-2 text-caption text-text-muted" role="status">
+              <span className="truncate">{datesMessage}</span>
+              {datesStatus === "error" && onRetryDates && (
+                <button type="button" onClick={onRetryDates} className="shrink-0 text-accent-400 underline">
+                  Retry
+                </button>
+              )}
+            </p>
+          )}
         </div>
       </div>
 
@@ -127,6 +154,9 @@ export default function DataContextPanel({
         <div className="min-w-0">
           <p className="text-caption uppercase tracking-widest text-text-muted">Selected Depth</p>
           <div className="mt-1 flex flex-wrap items-center gap-1">
+            {depthsStatus === "loading" && depthLevels.length === 0 && (
+              <span className="text-caption text-text-muted">Loading depth levels…</span>
+            )}
             {depthLevels.map((level) => (
               <button
                 key={level.value}
@@ -144,6 +174,11 @@ export default function DataContextPanel({
               </button>
             ))}
           </div>
+          {depthsMessage && (
+            <p className="mt-0.5 text-caption text-text-muted" role="status">
+              {depthsMessage}
+            </p>
+          )}
         </div>
       </div>
     </div>

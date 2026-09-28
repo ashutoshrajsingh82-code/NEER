@@ -52,6 +52,7 @@ import { Compass } from "lucide-react";
 import { AppShell, InspectionPanel, KPIDrawer, MainContent, Sidebar, TopNavigation } from "@/components/shell";
 import { Panel, StatusIndicator } from "@/components/ui";
 import { PointInspection } from "@/components/inspection";
+import { DateDepthProvider } from "./_context/DateDepthContext";
 import { PointInspectionProvider, usePointInspection } from "./dashboard/_context/PointInspectionContext";
 import DashboardKPIs from "./dashboard/_components/DashboardKPIs";
 import { formatLat, formatLon } from "@/lib/oceanDomain";
@@ -59,15 +60,18 @@ import { formatLat, formatLon } from "@/lib/oceanDomain";
 const MAIN_CONTENT_ID = "neer-main-content";
 
 export default function AppRouteGroupLayout({ children }) {
-  // The dashboard route's current date/depth/data-mode "view" plus its
-  // selection and shared reconstruction fetch — see
-  // PointInspectionContext.js's header comment. Harmless to provide on every
+  // Phase 36A: DateDepthProvider (backend-driven available/selected
+  // date + depth, shared app-wide) sits above PointInspectionProvider (the
+  // dashboard's selected point + shared reconstruction fetch, which
+  // consumes it) — see each file's header comment. Harmless to provide on every
   // route: only the dashboard's OceanMapSection/DataContextSection/
   // PointInspection/DashboardKPIs consume it today.
   return (
-    <PointInspectionProvider>
-      <AppShellContent>{children}</AppShellContent>
-    </PointInspectionProvider>
+    <DateDepthProvider>
+      <PointInspectionProvider>
+        <AppShellContent>{children}</AppShellContent>
+      </PointInspectionProvider>
+    </DateDepthProvider>
   );
 }
 

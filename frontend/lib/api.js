@@ -43,6 +43,8 @@
 // route now has a wrapper here.
 // -----------------------------------------------------------------------------
 
+import { parseDatesPayload } from "./dateDepthModel.js";
+
 /**
  * Default request timeout. Generous enough for slower calls later phases
  * will add (e.g. model inference), but still short enough that a hung
@@ -91,6 +93,33 @@ export class ApiError extends Error {
     this.code = code;
     this.status = status;
     this.details = details;
+  }
+}
+
+/**
+ * Coarse, UI-facing failure category for any thrown value — lets a component
+ * choose wording/iconography ("backend unreachable" vs "backend said no" vs
+ * "backend sent garbage") without switching over every individual code.
+ * @param {*} error
+ * @returns {"network"|"timeout"|"config"|"invalid_response"|"aborted"|"api"|"unknown"}
+ *   "api" = the backend answered with an error status (incl. 503s like
+ *   data_unavailable / model_unavailable).
+ */
+export function categorizeApiError(error) {
+  if (!(error instanceof ApiError)) return "unknown";
+  switch (error.code) {
+    case API_ERROR_CODES.NETWORK:
+      return "network";
+    case API_ERROR_CODES.TIMEOUT:
+      return "timeout";
+    case API_ERROR_CODES.CONFIG:
+      return "config";
+    case API_ERROR_CODES.INVALID_RESPONSE:
+      return "invalid_response";
+    case API_ERROR_CODES.ABORTED:
+      return "aborted";
+    default:
+      return typeof error.status === "number" ? "api" : "unknown";
   }
 }
 
@@ -443,23 +472,61 @@ export function health(options = {}) {
 /**
  * GET /model/info (backend/app/routers/model_info.py) — architecture,
  * runtime, and checkpoint metadata for whichever model is actually loaded.
+ * `architecture.depths` / `architecture.num_depths` are the source the
+ * dashboard's depth state is built from (see lib/dateDepthModel.js's
+ * `parseModelInfoDepths`, which owns validating that list).
+ *
+ * Phase 36A: only the *envelope* is validated here — a null/empty/non-object
+ * body is rejected as INVALID_RESPONSE rather than handed to callers to trip
+ * over. What a valid body must contain is deliberately left to each
+ * consumer (the depth list has its own, stricter validation).
  * @param {object} [options]
  * @returns {Promise<{architecture: object, runtime: object, checkpoint: object, environment: string|null}>}
- * @throws {ApiError} code "model_unavailable" (503) — no checkpoint is loaded
+ * @throws {ApiError} code "model_unavailable" (503) — no checkpoint is loaded;
+ *   "invalid_response" — the body isn't a JSON object
  */
-export function modelInfo(options = {}) {
-  return get("/model/info", undefined, options);
+export async function modelInfo(options = {}) {
+  const body = await get("/model/info", undefined, options);
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiError({
+      code: API_ERROR_CODES.INVALID_RESPONSE,
+      message: "GET /model/info returned no usable JSON object.",
+      status: 200,
+      details: { body },
+    });
+  }
+  return body;
 }
 
 /**
  * GET /dates (backend/app/routers/dates.py) — every date actually present
  * in the loaded tensor bundle (never a fabricated/hard-coded range).
+ *
+ * Phase 36A: the body is validated before it's returned — `dates` must be
+ * an array of real "YYYY-MM-DD" strings, otherwise this throws
+ * INVALID_RESPONSE instead of letting a malformed list reach the UI. The
+ * body itself is returned unchanged (same snake_case shape as before); an
+ * empty `dates` array is a VALID response (the caller's "empty" state, not
+ * an error). Use `parseDatesPayload` from lib/dateDepthModel.js for the
+ * de-duplicated/sorted, camelCase form.
  * @param {object} [options]
  * @returns {Promise<{dates: string[], count: number, min_date: string|null, max_date: string|null, data_mode: string, is_synthetic: boolean}>}
- * @throws {ApiError} code "data_unavailable" (503) — no dataset is loaded
+ * @throws {ApiError} code "data_unavailable" (503) — no dataset is loaded;
+ *   "invalid_response" — malformed body; "network_error"/"timeout" —
+ *   backend unreachable
  */
-export function dates(options = {}) {
-  return get("/dates", undefined, options);
+export async function dates(options = {}) {
+  const body = await get("/dates", undefined, options);
+  const parsed = parseDatesPayload(body);
+  if (!parsed.ok) {
+    throw new ApiError({
+      code: API_ERROR_CODES.INVALID_RESPONSE,
+      message: parsed.reason,
+      status: 200,
+      details: { body },
+    });
+  }
+  return body;
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   ApiError,
   apiRequest,
   argoEvaluation,
+  categorizeApiError,
   dataQuality,
   dates,
   embedding,
@@ -367,6 +368,10 @@ describe("endpoint function behavior", () => {
   });
 
   it("dates() and modelInfo() hit their fixed, parameter-less paths", async () => {
+    // Phase 36A: both now validate their body, so the mocks return valid ones.
+    global.fetch
+      .mockResolvedValueOnce(mockResponse({ bodyText: JSON.stringify({ dates: ["2020-01-01"] }) }))
+      .mockResolvedValueOnce(mockResponse({ bodyText: JSON.stringify({ architecture: {} }) }));
     await dates();
     await modelInfo();
     expect(global.fetch.mock.calls[0][0]).toBe(`${BASE_URL}/dates`);
@@ -429,5 +434,83 @@ describe("netcdfExport()", () => {
     await expect(
       netcdfExport({ latMin: -10, latMax: 10, lonMin: 0, lonMax: 20, date: "2020-01-15" })
     ).rejects.toMatchObject({ code: "netcdf_unavailable", status: 503 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 36A — dates() / modelInfo() response validation, categorizeApiError
+// ---------------------------------------------------------------------------
+describe("dates() response validation (Phase 36A)", () => {
+  const ok = (body) => global.fetch.mockResolvedValue(mockResponse({ bodyText: JSON.stringify(body) }));
+
+  it("resolves with the backend body unchanged on a valid response", async () => {
+    const body = { dates: ["2020-01-01", "2020-01-02"], count: 2, min_date: "2020-01-01", max_date: "2020-01-02", data_mode: "REAL", is_synthetic: false };
+    ok(body);
+    await expect(dates()).resolves.toEqual(body);
+  });
+
+  it("resolves (does not throw) for an empty date list — that's the caller's empty state", async () => {
+    ok({ dates: [], count: 0, min_date: null, max_date: null, data_mode: "REAL", is_synthetic: false });
+    await expect(dates()).resolves.toMatchObject({ dates: [] });
+  });
+
+  it.each([
+    ["an empty body", ""],
+    ["a body without `dates`", JSON.stringify({ count: 0 })],
+    ["a non-array `dates`", JSON.stringify({ dates: "2020-01-01" })],
+    ["a malformed date entry", JSON.stringify({ dates: ["2020-01-01", "nope"] })],
+  ])("throws invalid_response for %s", async (_l, bodyText) => {
+    global.fetch.mockResolvedValue(mockResponse({ bodyText }));
+    const error = await dates().catch((e) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.code).toBe(API_ERROR_CODES.INVALID_RESPONSE);
+    expect(categorizeApiError(error)).toBe("invalid_response");
+  });
+
+  it("passes the backend's data_unavailable 503 through as a normalized api error", async () => {
+    global.fetch.mockResolvedValue(
+      mockResponse({ ok: false, status: 503, statusText: "Service Unavailable", bodyText: JSON.stringify({ error: "data_unavailable", detail: "no dataset is loaded" }) })
+    );
+    const error = await dates().catch((e) => e);
+    expect(error).toMatchObject({ code: "data_unavailable", status: 503 });
+    expect(categorizeApiError(error)).toBe("api");
+  });
+
+  it("surfaces an unreachable backend as a network error", async () => {
+    global.fetch.mockRejectedValue(new TypeError("Failed to fetch"));
+    const error = await dates().catch((e) => e);
+    expect(error.code).toBe(API_ERROR_CODES.NETWORK);
+    expect(categorizeApiError(error)).toBe("network");
+  });
+});
+
+describe("modelInfo() response validation (Phase 36A)", () => {
+  it("returns a valid object body unchanged", async () => {
+    const body = { architecture: { depths: [0, 5], num_depths: 2 }, runtime: {}, checkpoint: {} };
+    global.fetch.mockResolvedValue(mockResponse({ bodyText: JSON.stringify(body) }));
+    await expect(modelInfo()).resolves.toEqual(body);
+  });
+  it.each([
+    ["empty body", ""],
+    ["array body", "[]"],
+    ["string body", JSON.stringify("ok")],
+  ])("throws invalid_response for %s", async (_l, bodyText) => {
+    global.fetch.mockResolvedValue(mockResponse({ bodyText }));
+    const error = await modelInfo().catch((e) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.code).toBe(API_ERROR_CODES.INVALID_RESPONSE);
+  });
+});
+
+describe("categorizeApiError", () => {
+  it("maps codes to UI categories", () => {
+    const mk = (code, status = null) => new ApiError({ code, message: "m", status });
+    expect(categorizeApiError(mk(API_ERROR_CODES.TIMEOUT))).toBe("timeout");
+    expect(categorizeApiError(mk(API_ERROR_CODES.CONFIG))).toBe("config");
+    expect(categorizeApiError(mk(API_ERROR_CODES.ABORTED))).toBe("aborted");
+    expect(categorizeApiError(mk("model_unavailable", 503))).toBe("api");
+    expect(categorizeApiError(mk("weird", null))).toBe("unknown");
+    expect(categorizeApiError(new Error("x"))).toBe("unknown");
+    expect(categorizeApiError(undefined)).toBe("unknown");
   });
 });

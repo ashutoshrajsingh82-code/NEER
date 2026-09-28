@@ -80,7 +80,7 @@ import {
 } from "lucide-react";
 import { Badge, Button, ErrorState, LoadingSkeleton, Panel, StatusIndicator, Tabs, Tooltip } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { formatSigned } from "@/lib/format";
+import { formatDate, formatSigned } from "@/lib/format";
 import {
   VARIABLE_COLOR_CONFIG,
   computeFiniteExtent,
@@ -129,7 +129,6 @@ const MODE_CONFIG = {
 const MIN_SCALE = 1;
 const MAX_SCALE = 8;
 const ZOOM_STEP = 1.35;
-const DATE_FORMAT = { day: "2-digit", month: "short", year: "numeric" };
 
 /** Pan bounds so the domain can never be dragged entirely out of view. */
 function clampPan(scale, x, y) {
@@ -280,11 +279,6 @@ export default function OceanMap({
   const activeVariable = isVariableControlled ? variable : internalVariable;
   const isSelectionControlled = selectedPoint !== undefined;
   const activeSelected = isSelectionControlled ? selectedPoint : internalSelected;
-  const activeDate = useMemo(() => {
-    if (!date) return null;
-    const parsed = new Date(date);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }, [date]);
   const modeConfig = MODE_CONFIG[dataMode] ?? MODE_CONFIG.reconstructed;
   const activeLabel = VARIABLE_TABS.find((tab) => tab.value === activeVariable)?.label;
 
@@ -811,7 +805,7 @@ export default function OceanMap({
         <span className="flex items-center gap-1.5 text-text-muted">
           <CalendarDays size={13} strokeWidth={1.75} aria-hidden="true" />
           <span className="font-mono text-text-secondary">
-            {activeDate ? activeDate.toLocaleDateString("en-GB", DATE_FORMAT) : "No date selected"}
+            {formatDate(date)}
           </span>
         </span>
         <span className="flex items-center gap-1.5 text-text-muted">
@@ -1095,7 +1089,7 @@ export default function OceanMap({
             <div className="flex items-center justify-between gap-3 border-t border-border-subtle pt-1 text-text-muted">
               <span className="flex items-center gap-1">
                 <CalendarDays size={10} strokeWidth={1.75} aria-hidden="true" />
-                {activeDate ? activeDate.toLocaleDateString("en-GB", DATE_FORMAT) : "No date selected"}
+                {formatDate(date)}
               </span>
               <span className="flex items-center gap-1">
                 <MoveVertical size={10} strokeWidth={1.75} aria-hidden="true" />

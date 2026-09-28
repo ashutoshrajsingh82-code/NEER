@@ -22,9 +22,14 @@ const DATE_FORMAT = { day: "2-digit", month: "short", year: "numeric" };
  */
 export function formatDate(date) {
   if (!date) return "No date selected";
+  // Phase 36A: a "YYYY-MM-DD" string (the app-wide date representation — see
+  // lib/dateDepthModel.js) is a calendar date, not an instant. `new Date()`
+  // parses it as UTC midnight, so formatting it in the viewer's local zone
+  // shows the PREVIOUS day anywhere west of UTC. Format it in UTC instead.
+  const isCalendarDate = typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date);
   const parsed = date instanceof Date ? date : new Date(date);
   if (Number.isNaN(parsed.getTime())) return String(date);
-  return parsed.toLocaleDateString("en-GB", DATE_FORMAT);
+  return parsed.toLocaleDateString("en-GB", isCalendarDate ? { ...DATE_FORMAT, timeZone: "UTC" } : DATE_FORMAT);
 }
 
 /**
