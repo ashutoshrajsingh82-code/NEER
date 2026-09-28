@@ -52,7 +52,7 @@
 // workflows will have its own notion of "what's selected".
 // -----------------------------------------------------------------------------
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { dates, reconstruct } from "@/lib/api";
 import { useApiRequest } from "@/lib/useApiRequest";
 import { POINT_STATUS, classifyPointLocation, isQueryablePoint } from "@/lib/pointClassification";
@@ -184,15 +184,21 @@ export function PointInspectionProvider({
     [selectedPoint, pointStatus, date, fetchPoint, resetReconstruct]
   );
 
-  // Synchronize operational date with backend available dates when connected
+  // Synchronize operational date with backend available dates when connected.
+  // Runs once on mount: the previous version listed `date`/`setDate` as deps,
+  // and `setDate` changes identity whenever the selection changes, so every
+  // map click re-requested GET /dates for nothing. `initialDateRef` keeps the
+  // "is the user still on the default date?" check without a dependency.
+  const initialDateRef = useRef(initialDate);
   useEffect(() => {
     let active = true;
     dates()
       .then((res) => {
         if (!active || !res?.dates?.length) return;
         const targetDate = res.max_date || res.dates[res.dates.length - 1];
-        if (targetDate && (!res.dates.includes(String(date)) || date === DEFAULT_DATE)) {
-          setDate(targetDate);
+        const current = initialDateRef.current;
+        if (targetDate && (!res.dates.includes(String(current)) || current === DEFAULT_DATE)) {
+          setDateState(targetDate);
         }
       })
       .catch(() => {
@@ -201,7 +207,7 @@ export function PointInspectionProvider({
     return () => {
       active = false;
     };
-  }, [date, setDate]);
+  }, []);
 
   const pointInspection = useMemo(
     () => ({

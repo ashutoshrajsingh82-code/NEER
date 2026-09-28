@@ -85,3 +85,28 @@ export function formatDepth(depth) {
   if (depth === 0) return "0 m (surface)";
   return `${depth} m`;
 }
+
+/**
+ * Turns a raw map coordinate into the selection object the dashboard shares.
+ *
+ * In-domain points snap to the nearest native grid-cell center and carry the
+ * zero-based `cell` indices (row from `latMin`, column from `lonMin`, the same
+ * axes the backend grid uses). Out-of-domain points keep their rounded raw
+ * coordinates with `cell: null` — they are still selectable (so the UI can
+ * say "outside the domain") but belong to no grid cell. Non-finite input
+ * returns `null`.
+ *
+ * @returns {{lat: number, lon: number, cell: {latIndex: number, lonIndex: number}|null}|null}
+ */
+export function toGridSelection(lat, lon, domain = OCEAN_DOMAIN) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (!isWithinDomain(lat, lon, domain)) return { lat: round2(lat), lon: round2(lon), cell: null };
+  const snapped = snapToGrid(lat, lon, domain);
+  return {
+    ...snapped,
+    cell: {
+      latIndex: gridIndex(snapped.lat, domain.latMin, domain),
+      lonIndex: gridIndex(snapped.lon, domain.lonMin, domain),
+    },
+  };
+}

@@ -49,6 +49,34 @@ function strideFor(scale) {
 }
 
 /**
+ * Cell-EDGE line positions along one axis, for lines every `step` degrees.
+ *
+ * The backend grid (and TemperatureLayer, which draws each value centered on
+ * its lat/lon) treats the axis coordinates 5.00, 5.25, ... as cell CENTERS,
+ * so cell edges sit half a resolution step away: 4.875, 5.125, ... Lines
+ * drawn *through* the coordinates (the pre-QA behaviour) cut every cell in
+ * half and are misaligned with the field they outline. Only edges inside the
+ * domain and the visible range are returned.
+ *
+ * @returns {number[]} edge positions in degrees, ascending
+ */
+export function gridEdgeLines(domainMin, domainMax, visibleMin, visibleMax, step, resolution) {
+  if (![domainMin, domainMax, visibleMin, visibleMax, step, resolution].every(Number.isFinite) || step <= 0) {
+    return [];
+  }
+  const origin = domainMin - resolution / 2; // first cell edge
+  const lo = clamp(visibleMin, domainMin, domainMax);
+  const hi = clamp(visibleMax, domainMin, domainMax);
+  const lines = [];
+  for (let k = Math.ceil((lo - origin) / step - 1e-9); ; k += 1) {
+    const edge = origin + k * step;
+    if (edge > hi + 1e-9) break;
+    if (edge >= domainMin - 1e-9) lines.push(Math.round(edge * 1000) / 1000);
+  }
+  return lines;
+}
+
+/**
  * @param {object} props
  * @param {{latMin:number, latMax:number, lonMin:number, lonMax:number}} props.bounds
  *   - visible viewport, already clamped to OCEAN_DOMAIN (OceanMap.js's
@@ -65,25 +93,10 @@ function GridOverlay({ bounds, scale, visible = true }) {
 
   const { latLines, lonLines } = useMemo(() => {
     if (!visible || !bounds || scale < GRID_MIN_VISIBLE_SCALE) return { latLines: [], lonLines: [] };
-
-    const visibleLatMin = clamp(bounds.latMin, domainLatMin, domainLatMax);
-    const visibleLatMax = clamp(bounds.latMax, domainLatMin, domainLatMax);
-    const visibleLonMin = clamp(bounds.lonMin, domainLonMin, domainLonMax);
-    const visibleLonMax = clamp(bounds.lonMax, domainLonMin, domainLonMax);
-
-    const latLines = [];
-    const latStart = domainLatMin + Math.floor((visibleLatMin - domainLatMin) / step) * step;
-    for (let lat = latStart; lat <= visibleLatMax + 1e-9; lat += step) {
-      latLines.push(Math.round(lat * 1000) / 1000);
-    }
-
-    const lonLines = [];
-    const lonStart = domainLonMin + Math.floor((visibleLonMin - domainLonMin) / step) * step;
-    for (let lon = lonStart; lon <= visibleLonMax + 1e-9; lon += step) {
-      lonLines.push(Math.round(lon * 1000) / 1000);
-    }
-
-    return { latLines, lonLines };
+    return {
+      latLines: gridEdgeLines(domainLatMin, domainLatMax, bounds.latMin, bounds.latMax, step, resolution),
+      lonLines: gridEdgeLines(domainLonMin, domainLonMax, bounds.lonMin, bounds.lonMax, step, resolution),
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, scale, step, bounds?.latMin, bounds?.latMax, bounds?.lonMin, bounds?.lonMax]);
 

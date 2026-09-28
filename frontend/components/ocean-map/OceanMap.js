@@ -94,14 +94,13 @@ import {
   formatDepth,
   formatLat,
   formatLon,
-  isWithinDomain,
   round2,
-  snapToGrid,
+  toGridSelection,
 } from "@/lib/oceanDomain";
 import { POINT_STATUS, classifyPointLocation, describePointStatus } from "@/lib/pointClassification";
 import CoordinateDisplay from "./CoordinateDisplay";
 import GridOverlay, { GRID_MIN_VISIBLE_SCALE } from "./GridOverlay";
-import { LANDMASSES, VIEW_BOX, isOnLand, project, unproject } from "./landmask";
+import { LANDMASSES, PX_PER_DEGREE, VIEW_BOX, isOnLand, project, unproject } from "./landmask";
 import MapControls from "./MapControls";
 import MapLegend from "./MapLegend";
 import TemperatureLayer from "./TemperatureLayer";
@@ -251,6 +250,11 @@ export default function OceanMap({
 }) {
   const containerRef = useRef(null);
   const dragRef = useRef(null);
+  // Pointer-move can fire far faster than the display refreshes; hover state
+  // is coalesced to one update per animation frame so the tooltip/readout
+  // (and the React render they trigger) never run more often than paint.
+  const hoverFrameRef = useRef(null);
+  const pendingHoverRef = useRef(null);
 
   const [internalVariable, setInternalVariable] = useState("sst");
   const [internalSelected, setInternalSelected] = useState(null);
@@ -276,7 +280,11 @@ export default function OceanMap({
   const activeVariable = isVariableControlled ? variable : internalVariable;
   const isSelectionControlled = selectedPoint !== undefined;
   const activeSelected = isSelectionControlled ? selectedPoint : internalSelected;
-  const activeDate = date ? new Date(date) : null;
+  const activeDate = useMemo(() => {
+    if (!date) return null;
+    const parsed = new Date(date);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }, [date]);
   const modeConfig = MODE_CONFIG[dataMode] ?? MODE_CONFIG.reconstructed;
   const activeLabel = VARIABLE_TABS.find((tab) => tab.value === activeVariable)?.label;
 
@@ -367,8 +375,19 @@ export default function OceanMap({
     const raw = clientToViewBox(event.clientX, event.clientY, rect);
     const worldX = (raw.x - transform.x) / transform.scale;
     const worldY = (raw.y - transform.y) / transform.scale;
-    setHover(unproject(worldX, worldY));
-    setHoverScreenPos({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+    pendingHoverRef.current = {
+      hover: unproject(worldX, worldY),
+      pos: { x: event.clientX - rect.left, y: event.clientY - rect.top },
+    };
+    if (hoverFrameRef.current === null) {
+      hoverFrameRef.current = requestAnimationFrame(() => {
+        hoverFrameRef.current = null;
+        const pending = pendingHoverRef.current;
+        if (!pending) return;
+        setHover(pending.hover);
+        setHoverScreenPos(pending.pos);
+      });
+    }
   }
 
   function handlePointerUp(event) {
@@ -383,12 +402,10 @@ export default function OceanMap({
     const worldX = (raw.x - transform.x) / transform.scale;
     const worldY = (raw.y - transform.y) / transform.scale;
     const { lat, lon } = unproject(worldX, worldY);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-    if (isWithinDomain(lat, lon)) {
-      selectPoint(snapToGrid(lat, lon));
-    } else {
-      selectPoint({ lat: round2(lat), lon: round2(lon) });
-    }
+    // Invalid coordinates are ignored; in-domain points snap to a grid cell
+    // (with its indices); out-of-domain points are kept as raw coordinates.
+    const selection = toGridSelection(lat, lon);
+    if (selection) selectPoint(selection);
   }
 
   function handleDoubleClick(event) {
@@ -420,6 +437,18 @@ export default function OceanMap({
         event.preventDefault();
         selectPoint(null);
       }
+    } else if (event.shiftKey && activeSelected && event.key.startsWith("Arrow")) {
+      // Shift+Arrow steps the selected cell one native grid cell — the
+      // keyboard equivalent of clicking a neighbouring cell.
+      event.preventDefault();
+      const step = OCEAN_DOMAIN.resolution;
+      const dLat = event.key === "ArrowUp" ? step : event.key === "ArrowDown" ? -step : 0;
+      const dLon = event.key === "ArrowRight" ? step : event.key === "ArrowLeft" ? -step : 0;
+      const next = toGridSelection(
+        clamp(activeSelected.lat + dLat, OCEAN_DOMAIN.latMin, OCEAN_DOMAIN.latMax),
+        clamp(activeSelected.lon + dLon, OCEAN_DOMAIN.lonMin, OCEAN_DOMAIN.lonMax)
+      );
+      if (next) selectPoint(next);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setTransform((prev) => {
@@ -446,13 +475,16 @@ export default function OceanMap({
       });
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      if (hover && Number.isFinite(hover.lat) && Number.isFinite(hover.lon)) {
-        if (isWithinDomain(hover.lat, hover.lon)) {
-          selectPoint(snapToGrid(hover.lat, hover.lon));
-        } else {
-          selectPoint({ lat: round2(hover.lat), lon: round2(hover.lon) });
-        }
-      }
+      // Pointer users select what is under the cursor; keyboard-only users
+      // (no hover) select the cell at the center of the current view.
+      const target =
+        hover ??
+        unproject(
+          (VIEW_BOX.width / 2 - transform.x) / transform.scale,
+          (VIEW_BOX.height / 2 - transform.y) / transform.scale
+        );
+      const selection = toGridSelection(target.lat, target.lon);
+      if (selection) selectPoint(selection);
     }
   }
 
@@ -475,10 +507,22 @@ export default function OceanMap({
     }
   }
 
-  function clearHover() {
+  const clearHover = useCallback(() => {
+    if (hoverFrameRef.current !== null) {
+      cancelAnimationFrame(hoverFrameRef.current);
+      hoverFrameRef.current = null;
+    }
+    pendingHoverRef.current = null;
     setHover(null);
     setHoverScreenPos(null);
-  }
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (hoverFrameRef.current !== null) cancelAnimationFrame(hoverFrameRef.current);
+    },
+    []
+  );
 
   function toggleLayer(key) {
     setLayerVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -586,8 +630,14 @@ export default function OceanMap({
   // hard-coded physical range, and `null` whenever there's nothing to draw
   // yet (unsupported variable, no data, or every cell masked).
   const colorConfig = VARIABLE_COLOR_CONFIG[activeVariable] ?? null;
-  const fieldExtent = layer.values ? computeFiniteExtent(layer.values) : null;
-  const colorMapper = colorConfig && fieldExtent ? makeColorMapper(colorConfig.kind, fieldExtent) : null;
+  // Memoized: recomputing the extent (a full grid scan) and minting a new
+  // mapper function on every hover render would also invalidate
+  // TemperatureLayer's cell memo, re-deriving thousands of rects per mouse move.
+  const fieldExtent = useMemo(() => (layer.values ? computeFiniteExtent(layer.values) : null), [layer.values]);
+  const colorMapper = useMemo(
+    () => (colorConfig && fieldExtent ? makeColorMapper(colorConfig.kind, fieldExtent) : null),
+    [colorConfig, fieldExtent]
+  );
   const legendSample = colorConfig?.kind === "diverging" ? divergingColor : thermalColor;
 
   // "No field available" is distinct from "loading"/"errored"/"unsupported":
@@ -641,6 +691,28 @@ export default function OceanMap({
     hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(layer.grid, layer.temperatureValues, hover) : null;
   const hoverAnomaly =
     hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(layer.grid, layer.anomalyValues, hover) : null;
+
+  // Outline of the selected grid cell, in world space (scales with the map).
+  const selectedCellRect = useMemo(() => {
+    if (!activeSelected || !Number.isFinite(activeSelected.lat) || !Number.isFinite(activeSelected.lon)) return null;
+    if (classifyPointLocation(activeSelected.lat, activeSelected.lon, null) === POINT_STATUS.OUTSIDE_DOMAIN) return null;
+    const size = OCEAN_DOMAIN.resolution * PX_PER_DEGREE;
+    const [cx, cy] = project([activeSelected.lon, activeSelected.lat]);
+    return { x: cx - size / 2, y: cy - size / 2, size };
+  }, [activeSelected]);
+
+  // Screen-reader announcement for the current selection (polite live region).
+  const selectedValue =
+    selectedStatus === POINT_STATUS.OCEAN ? lookupFieldValue(layer.grid, layer.values, activeSelected) : null;
+  const selectionAnnouncement = activeSelected
+    ? `Selected ${formatLat(activeSelected.lat)}, ${formatLon(activeSelected.lon)}. ${
+        selectedStatus === POINT_STATUS.OCEAN
+          ? selectedValue === null
+            ? "Ocean grid cell, no field value loaded."
+            : `Ocean grid cell, ${activeLabel ?? "value"} ${selectedValue.toFixed(2)}${colorConfig?.unit ?? ""}.`
+          : `${describePointStatus(selectedStatus)}.`
+      }`
+    : "";
 
   // MapControls' primary, spec-required toggles:
   // 1. Temperature layer visibility (turns SST on/off, or switches to SST)
@@ -752,7 +824,7 @@ export default function OceanMap({
       <div
         ref={containerRef}
         role="application"
-        aria-label="Interactive North Indian Ocean grid map. Drag to pan, scroll to zoom, click to select a grid cell."
+        aria-label="Interactive North Indian Ocean grid map. Drag or use arrow keys to pan, scroll or plus and minus to zoom, click or press Enter to select a grid cell, Shift plus arrow keys to move the selected cell, zero to reset the view."
         tabIndex={0}
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}
@@ -804,6 +876,19 @@ export default function OceanMap({
               scale={transform.scale}
               visible={layerVisibility.scientificGrid}
             />
+
+            {selectedCellRect && (
+              <rect
+                data-layer="selected-cell"
+                x={selectedCellRect.x}
+                y={selectedCellRect.y}
+                width={selectedCellRect.size}
+                height={selectedCellRect.size}
+                fill="rgba(45,212,191,0.18)"
+                stroke="#2DD4BF"
+                strokeWidth={1.25 / transform.scale}
+              />
+            )}
 
             {graticuleLines}
             {coastlineElements}
@@ -907,14 +992,20 @@ export default function OceanMap({
         {/* Scientific field — error state, with a retry that re-issues the
             same GET /reconstruct/grid request. */}
         {layer.supported && layerVisibility.temperatureField && layer.isError && (
-          <div className="pointer-events-none absolute inset-x-14 top-3 z-raised flex justify-center">
+          // MapOverlay (not a bare div): the map surface captures the pointer
+          // on pointer-down, which would redirect the click away from the
+          // Retry button so it never fired.
+          <MapOverlay
+            className="pointer-events-none absolute inset-x-14 top-3 z-raised flex justify-center"
+            onEnter={clearHover}
+          >
             <ErrorState
               className="pointer-events-auto w-full max-w-sm bg-surface-overlay/95 py-5 shadow-raised"
               title="Field data unavailable"
               message={layer.error?.message ?? "The scientific field could not be loaded."}
               onRetry={layer.retry}
             />
-          </div>
+          </MapOverlay>
         )}
 
         {/* Scientific field — missing-data state: the request succeeded
@@ -949,6 +1040,7 @@ export default function OceanMap({
             reading (Requirement 5 / scientific-integrity). */}
         {hover && hoverScreenPos && (
           <div
+            aria-hidden="true"
             className="pointer-events-none absolute z-toast flex w-56 flex-col gap-1.5 rounded-md border border-border-strong bg-surface-overlay px-3 py-2 text-caption text-text-primary shadow-raised"
             style={{
               left: hoverScreenPos.x,
@@ -1046,6 +1138,10 @@ export default function OceanMap({
           </MapLegend>
         </MapOverlay>
       </div>
+
+      <p role="status" aria-live="polite" className="sr-only">
+        {selectionAnnouncement}
+      </p>
 
       {/* Coordinate readout */}
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1 border-t border-border-subtle pt-3 text-caption font-mono text-text-muted">

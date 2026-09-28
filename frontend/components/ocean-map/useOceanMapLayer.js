@@ -56,6 +56,46 @@ import { reconstructGrid } from "@/lib/api";
 import { useApiRequest } from "@/lib/useApiRequest";
 import { OCEAN_DOMAIN } from "@/lib/oceanDomain";
 
+/** Estimated number of native-resolution cells a bounds box covers. */
+export function estimateCells({ latMin, latMax, lonMin, lonMax }) {
+  const latCells = Math.max(1, Math.round((latMax - latMin) / OCEAN_DOMAIN.resolution) + 1);
+  const lonCells = Math.max(1, Math.round((lonMax - lonMin) / OCEAN_DOMAIN.resolution) + 1);
+  return latCells * lonCells;
+}
+
+/** True when `outer` fully covers `inner` (both {latMin,latMax,lonMin,lonMax}). */
+export function boundsContain(outer, inner) {
+  if (!outer || !inner) return false;
+  const eps = 1e-9;
+  return (
+    outer.latMin <= inner.latMin + eps &&
+    outer.latMax >= inner.latMax - eps &&
+    outer.lonMin <= inner.lonMin + eps &&
+    outer.lonMax >= inner.lonMax - eps
+  );
+}
+
+/**
+ * Bounds actually sent to GET /reconstruct/grid for a given visible viewport.
+ *
+ * The viewport is snapped OUTWARD to whole degrees (and clamped to the
+ * domain), so a small pan usually resolves to the same request — same cache
+ * key, no new API call — instead of a fresh request per pixel of drag. It
+ * only ever grows the region, never shrinks it, so everything visible is
+ * still covered. If snapping would push the request past the backend's cell
+ * limit, the exact viewport is used instead (never a request the backend is
+ * guaranteed to reject).
+ */
+export function planRequestBounds(bounds) {
+  const snapped = {
+    latMin: Math.max(OCEAN_DOMAIN.latMin, Math.floor(bounds.latMin)),
+    latMax: Math.min(OCEAN_DOMAIN.latMax, Math.ceil(bounds.latMax)),
+    lonMin: Math.max(OCEAN_DOMAIN.lonMin, Math.floor(bounds.lonMin)),
+    lonMax: Math.min(OCEAN_DOMAIN.lonMax, Math.ceil(bounds.lonMax)),
+  };
+  return estimateCells(snapped) <= MAX_GRID_POINTS ? snapped : bounds;
+}
+
 /**
  * Element-wise subtraction of two matching-shape, arbitrarily-nested
  * (2D or 3D) number arrays — `temperature`/`climatology` are `(n_lat,
@@ -107,16 +147,28 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
   const support = LAYER_SUPPORT[variable] ?? UNKNOWN_VARIABLE;
   const isSupported = support.supported;
   const fieldName = support.field;
-  const { latMin, latMax, lonMin, lonMax } = bounds;
+  const viewLatMin = bounds.latMin;
+  const viewLatMax = bounds.latMax;
+  const viewLonMin = bounds.lonMin;
+  const viewLonMax = bounds.lonMax;
 
-  const estimatedCells = useMemo(() => {
-    const latCells = Math.max(1, Math.round((latMax - latMin) / OCEAN_DOMAIN.resolution) + 1);
-    const lonCells = Math.max(1, Math.round((lonMax - lonMin) / OCEAN_DOMAIN.resolution) + 1);
-    return latCells * lonCells;
-  }, [latMin, latMax, lonMin, lonMax]);
+  const estimatedCells = useMemo(
+    () => estimateCells({ latMin: viewLatMin, latMax: viewLatMax, lonMin: viewLonMin, lonMax: viewLonMax }),
+    [viewLatMin, viewLatMax, viewLonMin, viewLonMax]
+  );
   const tooLargeForCellLimit = estimatedCells > MAX_GRID_POINTS;
 
-  const hasValidBounds = latMin < latMax && lonMin < lonMax;
+  const hasValidBounds = viewLatMin < viewLatMax && viewLonMin < viewLonMax;
+
+  // Region actually requested — the viewport snapped outward to whole degrees
+  // (see planRequestBounds), so nearby pans share one request.
+  const { latMin, latMax, lonMin, lonMax } = useMemo(
+    () =>
+      hasValidBounds
+        ? planRequestBounds({ latMin: viewLatMin, latMax: viewLatMax, lonMin: viewLonMin, lonMax: viewLonMax })
+        : { latMin: viewLatMin, latMax: viewLatMax, lonMin: viewLonMin, lonMax: viewLonMax },
+    [hasValidBounds, viewLatMin, viewLatMax, viewLonMin, viewLonMax]
+  );
   const canFetch = isSupported && hasValidBounds && !tooLargeForCellLimit && Boolean(date);
 
   const { data, error, status, isLoading, isError, run, reset } = useApiRequest(reconstructGrid);
@@ -132,17 +184,37 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
       )
     : null;
   const lastKeyRef = useRef(null);
+  // What the last issued request covers (params signature + region), and the
+  // latest status — refs, not effect deps, so reading them never re-fires the
+  // effect. Together they let a zoom-in / small pan that is still fully
+  // inside an already-loaded region (same field, date and depth) reuse that
+  // data instead of issuing another request for cells we already hold.
+  const loadedRef = useRef(null);
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const paramsSig = canFetch ? [family, String(date), depth].join("|") : null;
 
   useEffect(() => {
     if (!canFetch) {
       if (lastKeyRef.current !== null) reset();
       lastKeyRef.current = null;
+      loadedRef.current = null;
       return;
     }
     if (lastKeyRef.current === requestKey) return;
+    if (
+      loadedRef.current &&
+      loadedRef.current.sig === paramsSig &&
+      (statusRef.current === "success" || statusRef.current === "loading") &&
+      boundsContain(loadedRef.current.bounds, { latMin, latMax, lonMin, lonMax })
+    ) {
+      lastKeyRef.current = requestKey;
+      return;
+    }
 
     const timer = setTimeout(() => {
       lastKeyRef.current = requestKey;
+      loadedRef.current = { sig: paramsSig, bounds: { latMin, latMax, lonMin, lonMax } };
       run({ latMin, latMax, lonMin, lonMax, date, depth }).catch(() => {
         // Swallowed here on purpose — `error`/`isError` below already
         // capture the failure for the caller to render.
@@ -181,7 +253,12 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
     return data.climatology ? subtractGrids(data.temperature, data.climatology) : null;
   }, [data, isSupported]);
 
-  const grid = data ? { lat: data.lat, lon: data.lon, depth: data.depth, depths: data.depths } : null;
+  // Memoized: a new object identity per render would defeat the memoization
+  // of every consumer (TemperatureLayer re-derives all its cells from `grid`).
+  const grid = useMemo(
+    () => (data ? { lat: data.lat, lon: data.lon, depth: data.depth, depths: data.depths } : null),
+    [data]
+  );
 
   // Re-issues the same request after a failure (e.g. a transient network
   // error) without waiting for date/depth/bounds to change — the request
@@ -189,12 +266,13 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
   // caller-triggered retry after `isError` needs its own escape hatch.
   const retry = useCallback(() => {
     if (!canFetch) return;
+    loadedRef.current = { sig: paramsSig, bounds: { latMin, latMax, lonMin, lonMax } };
     run({ latMin, latMax, lonMin, lonMax, date, depth }).catch(() => {
       // Swallowed here on purpose — `error`/`isError` above already
       // capture the failure for the caller to render.
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canFetch, latMin, latMax, lonMin, lonMax, date, depth]);
+  }, [canFetch, paramsSig, latMin, latMax, lonMin, lonMax, date, depth]);
 
   return {
     supported: support.supported,

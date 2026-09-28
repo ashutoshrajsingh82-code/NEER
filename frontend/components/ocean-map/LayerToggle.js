@@ -24,7 +24,7 @@
 // pick up the app-wide focus-visible ring so keyboard users can see focus.
 // -----------------------------------------------------------------------------
 
-import { forwardRef } from "react";
+import { forwardRef, useId } from "react";
 import { motion } from "framer-motion";
 import { Tooltip } from "@/components/ui";
 import { cn } from "@/lib/cn";
@@ -59,10 +59,15 @@ const LayerToggle = forwardRef(function LayerToggle(
   ref
 ) {
   const tooltipText = disabled ? disabledReason ?? description ?? label : description ?? label;
+  const descriptionId = useId();
+  // Row layout shows its description as visible text (reachable on touch and
+  // by screen readers via aria-describedby) rather than hiding it in a
+  // hover-only tooltip; while disabled it shows the reason instead.
+  const rowDescription = disabled ? disabledReason ?? description : description;
 
   if (layout === "row") {
     return (
-      <Tooltip content={disabled ? disabledReason : description} position="top">
+      <>
         <button
           ref={ref}
           type="button"
@@ -70,6 +75,7 @@ const LayerToggle = forwardRef(function LayerToggle(
           aria-checked={active}
           aria-label={label}
           disabled={disabled}
+          aria-describedby={rowDescription ? descriptionId : undefined}
           onClick={() => onToggle?.(!active)}
           className={cn(
             "flex w-full items-center justify-between gap-3 rounded-sm px-2 py-1.5 text-left text-small neer-transition select-none",
@@ -89,7 +95,14 @@ const LayerToggle = forwardRef(function LayerToggle(
                 aria-hidden="true"
               />
             )}
-            <span className="truncate">{label}</span>
+            <span className="min-w-0">
+              <span className="block truncate">{label}</span>
+              {rowDescription && (
+                <span id={descriptionId} className="block text-caption text-text-muted">
+                  {rowDescription}
+                </span>
+              )}
+            </span>
           </span>
           <span
             aria-hidden="true"
@@ -106,7 +119,7 @@ const LayerToggle = forwardRef(function LayerToggle(
             />
           </span>
         </button>
-      </Tooltip>
+      </>
     );
   }
 
