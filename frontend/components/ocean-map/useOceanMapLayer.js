@@ -61,10 +61,19 @@ import { OCEAN_DOMAIN } from "@/lib/oceanDomain";
  * (2D or 3D) number arrays — `temperature`/`climatology` are `(n_lat,
  * n_lon)` when the caller requested one depth, `(n_lat, n_lon, num_depths)`
  * when it requested every depth level.
+ *
+ * A cell that is missing (null/undefined/NaN) in EITHER grid yields `null`
+ * — a missing climatology is never treated as 0 (that would report the full
+ * temperature as an "anomaly") and a masked temperature never throws.
+ * Callers (colorScale/legend/tooltip) already treat `null` as "no data".
  */
-function subtractGrids(a, b) {
-  if (typeof a === "number") return a - (typeof b === "number" ? b : 0);
-  return a.map((item, i) => subtractGrids(item, b[i]));
+export function subtractGrids(a, b) {
+  if (Array.isArray(a)) {
+    return a.map((item, i) => subtractGrids(item, Array.isArray(b) ? b[i] : undefined));
+  }
+  if (typeof a !== "number" || !Number.isFinite(a)) return null;
+  if (typeof b !== "number" || !Number.isFinite(b)) return null;
+  return a - b;
 }
 
 /**

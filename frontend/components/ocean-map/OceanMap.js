@@ -100,7 +100,7 @@ import {
 } from "@/lib/oceanDomain";
 import { POINT_STATUS, classifyPointLocation, describePointStatus } from "@/lib/pointClassification";
 import CoordinateDisplay from "./CoordinateDisplay";
-import GridOverlay from "./GridOverlay";
+import GridOverlay, { GRID_MIN_VISIBLE_SCALE } from "./GridOverlay";
 import { LANDMASSES, VIEW_BOX, isOnLand, project, unproject } from "./landmask";
 import MapControls from "./MapControls";
 import MapLegend from "./MapLegend";
@@ -187,9 +187,34 @@ function lookupFieldValue(grid, values, point) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function ToolbarButton({ icon, label, onClick, active }) {
+/**
+ * Wrapper for every control laid over the map surface (layer controls, zoom
+ * buttons, legend). The surface owns pointer-capture-based pan/click-to-select
+ * and a hover readout, so without this an overlay press would (a) start a
+ * pan and capture the pointer away from the button, (b) register as a click
+ * that selects the grid cell underneath, and (c) leave the hover tooltip
+ * following the cursor over the controls. Stopping the pointer events here
+ * and clearing hover on entry keeps overlays and map cleanly separate.
+ */
+function MapOverlay({ className, onEnter, children }) {
+  const stop = (event) => event.stopPropagation();
   return (
-    <Tooltip content={label}>
+    <div
+      className={className}
+      onPointerDown={stop}
+      onPointerUp={stop}
+      onPointerMove={stop}
+      onDoubleClick={stop}
+      onPointerEnter={onEnter}
+    >
+      {children}
+    </div>
+  );
+}
+
+function ToolbarButton({ icon, label, onClick, active, tooltipPosition = "top" }) {
+  return (
+    <Tooltip content={label} position={tooltipPosition}>
       <span>
         <Button
           variant={active ? "secondary" : "ghost"}
@@ -374,6 +399,13 @@ export default function OceanMap({
   }
 
   function handleKeyDown(event) {
+    // Map shortcuts apply only when the map surface itself is focused. Keys
+    // bubbling up from a control inside it (layer switches, zoom buttons,
+    // legend collapse) must keep their native behavior — in particular
+    // Enter/Space activation, which the Enter/Space branch below would
+    // otherwise preventDefault() — and Escape must just close a popover
+    // rather than also clearing the selected cell.
+    if (event.target !== event.currentTarget) return;
     if (event.key === "+" || event.key === "=") {
       event.preventDefault();
       zoomByButton(ZOOM_STEP);
@@ -441,6 +473,11 @@ export default function OceanMap({
     } else {
       containerRef.current.requestFullscreen?.().catch(() => {});
     }
+  }
+
+  function clearHover() {
+    setHover(null);
+    setHoverScreenPos(null);
   }
 
   function toggleLayer(key) {
@@ -629,7 +666,7 @@ export default function OceanMap({
       key: "anomaly-field",
       icon: TrendingUp,
       label: "Temperature anomaly layer",
-      description: "Temperature anomaly relative to climatology",
+      description: "Departure from climatology",
       active: layerVisibility.temperatureField && activeVariable === "anomaly",
       onToggle: () => {
         if (layerVisibility.temperatureField && activeVariable === "anomaly") {
@@ -644,7 +681,13 @@ export default function OceanMap({
       key: "scientific-grid",
       icon: LayoutGrid,
       label: "0.25° scientific grid",
-      description: "NEER native 0.25° × 0.25° grid overlay",
+      // The overlay draws nothing below GRID_MIN_VISIBLE_SCALE (0.25° cells
+      // are unreadably small at full-domain zoom). Say so, or an "on" switch
+      // with nothing visible looks broken.
+      description:
+        transform.scale < GRID_MIN_VISIBLE_SCALE
+          ? "Native 0.25° cells — appears when zoomed in"
+          : "Native 0.25° × 0.25° cell grid",
       active: layerVisibility.scientificGrid,
       onToggle: () => toggleLayer("scientificGrid"),
     },
@@ -715,10 +758,7 @@ export default function OceanMap({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerLeave={() => {
-          setHover(null);
-          setHoverScreenPos(null);
-        }}
+        onPointerLeave={clearHover}
         onDoubleClick={handleDoubleClick}
         onKeyDown={handleKeyDown}
         className={cn(
@@ -831,19 +871,25 @@ export default function OceanMap({
           </g>
         </svg>
 
-        {/* Layer controls — temperature/anomaly/grid visibility + reset,
-            grouped behind one compact trigger (MapControls) so the map
-            surface itself stays uncluttered. */}
-        <div className="absolute left-3 top-3">
-          <MapControls layers={mapControlLayers} baseLayers={mapBaseLayers} onReset={resetView} />
-        </div>
+        {/* Layer controls — temperature / anomaly / grid visibility, grouped
+            behind one compact trigger (MapControls) so the map surface
+            stays uncluttered. Reset lives with zoom (right) — one click,
+            no duplicate inside the popover. */}
+        <MapOverlay className="absolute left-3 top-3 z-raised" onEnter={clearHover}>
+          <MapControls layers={mapControlLayers} baseLayers={mapBaseLayers} />
+        </MapOverlay>
 
         {/* Zoom & domain reset controls */}
-        <div className="absolute right-3 top-3 flex flex-col gap-1">
-          <ToolbarButton icon={ZoomIn} label="Zoom in" onClick={() => zoomByButton(ZOOM_STEP)} />
-          <ToolbarButton icon={ZoomOut} label="Zoom out" onClick={() => zoomByButton(1 / ZOOM_STEP)} />
-          <ToolbarButton icon={RotateCcw} label="Reset / fit to NEER domain" onClick={resetView} />
-        </div>
+        <MapOverlay className="absolute right-3 top-3 z-raised flex flex-col gap-1" onEnter={clearHover}>
+          <ToolbarButton icon={ZoomIn} label="Zoom in" tooltipPosition="left" onClick={() => zoomByButton(ZOOM_STEP)} />
+          <ToolbarButton icon={ZoomOut} label="Zoom out" tooltipPosition="left" onClick={() => zoomByButton(1 / ZOOM_STEP)} />
+          <ToolbarButton
+            icon={RotateCcw}
+            label="Reset / fit to NEER domain"
+            tooltipPosition="left"
+            onClick={resetView}
+          />
+        </MapOverlay>
 
         {/* Scientific field — loading state. Non-blocking: the base map
             stays interactive while GET /reconstruct/grid is in flight. */}
@@ -861,9 +907,9 @@ export default function OceanMap({
         {/* Scientific field — error state, with a retry that re-issues the
             same GET /reconstruct/grid request. */}
         {layer.supported && layerVisibility.temperatureField && layer.isError && (
-          <div className="absolute inset-x-4 top-3 z-raised flex justify-center">
+          <div className="pointer-events-none absolute inset-x-14 top-3 z-raised flex justify-center">
             <ErrorState
-              className="w-full max-w-sm bg-surface-overlay/95 py-5 shadow-raised"
+              className="pointer-events-auto w-full max-w-sm bg-surface-overlay/95 py-5 shadow-raised"
               title="Field data unavailable"
               message={layer.error?.message ?? "The scientific field could not be loaded."}
               onRetry={layer.retry}
@@ -967,23 +1013,13 @@ export default function OceanMap({
           </div>
         )}
 
-        {/* Legend */}
-        <div className="absolute bottom-3 left-3 flex flex-col gap-2 rounded-md border border-border bg-surface-base/90 px-3 py-2 backdrop-blur-sm max-w-[calc(100%-1.5rem)] sm:max-w-xs md:max-w-sm">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-text-muted">
-            <span className="flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: "#0E2A42" }} aria-hidden="true" />
-              Ocean (data domain)
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: "#132133" }} aria-hidden="true" />
-              Land (masked)
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-full border border-accent-400" aria-hidden="true" />
-              Selected cell
-            </span>
-          </div>
-
+        {/* Legend — scientific scale for the field currently drawn, plus
+            the base-map key. See MapLegend.js for the no-invented-values
+            contract. */}
+        <MapOverlay
+          className="absolute bottom-3 left-3 z-raised max-w-[calc(100%-1.5rem)] sm:max-w-xs md:max-w-sm"
+          onEnter={clearHover}
+        >
           <MapLegend
             variable={activeVariable}
             activeLabel={activeLabel}
@@ -992,13 +1028,32 @@ export default function OceanMap({
             extent={fieldExtent}
             layer={layer}
             fieldVisible={layerVisibility.temperatureField}
-          />
-        </div>
+          >
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-text-muted">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: "#0E2A42" }} aria-hidden="true" />
+                Ocean (data domain)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: "#132133" }} aria-hidden="true" />
+                Land (masked)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full border border-accent-400" aria-hidden="true" />
+                Selected cell
+              </span>
+            </div>
+          </MapLegend>
+        </MapOverlay>
       </div>
 
       {/* Coordinate readout */}
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1 border-t border-border-subtle pt-3 text-caption font-mono text-text-muted">
-        <CoordinateDisplay lat={readoutPoint?.lat} lon={readoutPoint?.lon} />
+        <CoordinateDisplay
+          lat={readoutPoint?.lat}
+          lon={readoutPoint?.lon}
+          source={hover ? "Cursor" : activeSelected ? "Selected cell" : undefined}
+        />
         <span>DEPTH {depth} m</span>
         <span>VALUE {readoutValueText}</span>
         {(hover || activeSelected) && readoutStatus && (

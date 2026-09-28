@@ -17,6 +17,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   esbuild: {
     loader: "jsx",
+    // Same automatic JSX runtime Next.js uses, so component files (which
+    // don't `import React`) can be server-rendered in tests.
+    jsx: "automatic",
     include: /.[jt]sx?$/,
     exclude: [],
   },

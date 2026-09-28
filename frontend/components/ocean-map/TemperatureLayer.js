@@ -45,7 +45,7 @@ import { PX_PER_DEGREE, project } from "./landmask";
  *   parent so toggling it back on doesn't re-trigger a fetch)
  * @param {number} [props.opacity=0.85]
  */
-export default function TemperatureLayer({ grid, values, colorMapper, visible = true, opacity = 0.85 }) {
+function TemperatureLayer({ grid, values, colorMapper, visible = true, opacity = 0.85 }) {
   const cells = useMemo(() => {
     const empty = { rects: [], cellWidthPx: 0, cellHeightPx: 0 };
     if (!visible || !grid || !values || !colorMapper) return empty;

@@ -35,7 +35,7 @@ import { PX_PER_DEGREE, project } from "./landmask";
 
 /** Below this zoom, 0.25° cells are too small to read meaningfully — the
  * grid simply doesn't render rather than becoming visual noise. */
-const MIN_VISIBLE_SCALE = 1.75;
+export const GRID_MIN_VISIBLE_SCALE = 1.75;
 
 /**
  * How many resolution-steps apart drawn lines are, coarsening as the user
@@ -56,7 +56,7 @@ function strideFor(scale) {
  * @param {number} props.scale - current map zoom (transform.scale)
  * @param {boolean} [props.visible=true] - layer-visibility toggle
  */
-export default function GridOverlay({ bounds, scale, visible = true }) {
+function GridOverlay({ bounds, scale, visible = true }) {
   const { resolution, latMin: domainLatMin, latMax: domainLatMax, lonMin: domainLonMin, lonMax: domainLonMax } =
     OCEAN_DOMAIN;
 
@@ -64,7 +64,7 @@ export default function GridOverlay({ bounds, scale, visible = true }) {
   const step = resolution * stride;
 
   const { latLines, lonLines } = useMemo(() => {
-    if (!visible || !bounds || scale < MIN_VISIBLE_SCALE) return { latLines: [], lonLines: [] };
+    if (!visible || !bounds || scale < GRID_MIN_VISIBLE_SCALE) return { latLines: [], lonLines: [] };
 
     const visibleLatMin = clamp(bounds.latMin, domainLatMin, domainLatMax);
     const visibleLatMax = clamp(bounds.latMax, domainLatMin, domainLatMax);

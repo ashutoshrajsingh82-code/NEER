@@ -114,6 +114,24 @@ export function computeFiniteExtent(nested) {
 }
 
 /**
+ * The symmetric half-range a diverging (signed anomaly) scale is drawn
+ * against: the larger of |min| and |max| of the real field, so zero always
+ * sits at the neutral center of the scale and +/- values of equal size get
+ * equally strong colors. Falls back to 1 only for the degenerate all-zero
+ * field, purely to avoid dividing by zero — never as a physical range.
+ *
+ * This is the single source of truth for that half-range: makeColorMapper
+ * (what the map paints) and the legend (what the labels claim) both read
+ * it, so a legend label can never disagree with the color actually drawn
+ * for that value.
+ * @param {{min: number, max: number}} extent - real extent from computeFiniteExtent
+ * @returns {number} > 0
+ */
+export function getDivergingLimit(extent) {
+  return Math.max(Math.abs(extent.min), Math.abs(extent.max)) || 1;
+}
+
+/**
  * Builds a `value -> CSS color` function for one loaded field, choosing a
  * sequential or diverging scale by `kind` and normalizing against the
  * field's own finite extent (never a hard-coded physical range).
@@ -126,7 +144,7 @@ export function computeFiniteExtent(nested) {
  */
 export function makeColorMapper(kind, extent) {
   if (kind === "diverging") {
-    const maxAbs = Math.max(Math.abs(extent.min), Math.abs(extent.max)) || 1;
+    const maxAbs = getDivergingLimit(extent);
     return (value) => {
       if (typeof value !== "number" || !Number.isFinite(value)) return null;
       return divergingColor(Math.max(-1, Math.min(1, value / maxAbs)));
