@@ -26,7 +26,7 @@ export const DEPTH_LEVELS = Object.freeze([
   0, 5, 10, 20, 30, 50, 75, 100, 125, 150, 200, 300, 500, 700, 1000,
 ]);
 
-/** Data-mode vocabulary shared with DataContextPanel. */
+/** Data-mode vocabulary shared with DataContextSection. */
 export const DATA_MODES = Object.freeze(["reconstructed", "observed", "blended"]);
 
 /**
@@ -82,6 +82,8 @@ export function formatLon(lon) {
 
 /** Format a depth level in metres, e.g. "0 m (surface)" / "200 m". */
 export function formatDepth(depth) {
+  // null/undefined/NaN: no depth selected yet (GET /model/info hasn't answered).
+  if (typeof depth !== "number" || !Number.isFinite(depth)) return "--";
   if (depth === 0) return "0 m (surface)";
   return `${depth} m`;
 }

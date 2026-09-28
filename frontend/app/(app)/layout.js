@@ -52,7 +52,7 @@ import { Compass } from "lucide-react";
 import { AppShell, InspectionPanel, KPIDrawer, MainContent, Sidebar, TopNavigation } from "@/components/shell";
 import { Panel, StatusIndicator } from "@/components/ui";
 import { PointInspection } from "@/components/inspection";
-import { DateDepthProvider } from "./_context/DateDepthContext";
+import { DateDepthProvider } from "./dashboard/_context/DateDepthContext";
 import { PointInspectionProvider, usePointInspection } from "./dashboard/_context/PointInspectionContext";
 import DashboardKPIs from "./dashboard/_components/DashboardKPIs";
 import { formatLat, formatLon } from "@/lib/oceanDomain";

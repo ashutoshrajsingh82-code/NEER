@@ -236,6 +236,8 @@ function ToolbarButton({ icon, label, onClick, active, tooltipPosition = "top" }
  * @param {(value: string) => void} onVariableChange
  * @param {{lat: number, lon: number}} selectedPoint - controlled selection; falls back to internal state
  * @param {(point: {lat: number, lon: number}) => void} onSelectPoint - called with the snapped grid-cell center on click
+ * @param {(status: {isUpdating: boolean, isError: boolean}) => void} onFieldStatusChange - Phase 36B: reports
+ *   whether the field for the current date/depth is being fetched / failed, so controls elsewhere can show a cue
  */
 export default function OceanMap({
   dataMode = "reconstructed",
@@ -245,6 +247,7 @@ export default function OceanMap({
   onVariableChange,
   selectedPoint,
   onSelectPoint,
+  onFieldStatusChange,
   className,
 }) {
   const containerRef = useRef(null);
@@ -619,6 +622,15 @@ export default function OceanMap({
 
   const layer = useOceanMapLayer({ variable: activeVariable, date, depth, bounds: visibleBounds });
 
+  // Let date/depth controls elsewhere on the page show an "updating" cue; the
+  // request itself is owned here, driven only by date/depth/viewport.
+  const fieldUpdating = layer.supported && layerVisibility.temperatureField && layer.isUpdating;
+  const fieldErrored = layer.supported && layer.isError;
+  useEffect(() => {
+    onFieldStatusChange?.({ isUpdating: fieldUpdating, isError: fieldErrored });
+  }, [onFieldStatusChange, fieldUpdating, fieldErrored]);
+  useEffect(() => () => onFieldStatusChange?.({ isUpdating: false, isError: false }), [onFieldStatusChange]);
+
   // Color scale for whatever field is actually loaded — domain-fitted to
   // that field's own real finite min/max (computeFiniteExtent), never a
   // hard-coded physical range, and `null` whenever there's nothing to draw
@@ -638,7 +650,12 @@ export default function OceanMap({
   // the request succeeded but there is genuinely nothing to draw (e.g. no
   // climatology for this date, so anomaly can't be derived).
   const showEmptyFieldState =
-    layer.supported && Boolean(date) && layer.status === "success" && !layer.isLoading && !layer.values;
+    layer.supported &&
+    Boolean(date) &&
+    layer.status === "success" &&
+    !layer.isUpdating &&
+    !layer.isStale &&
+    (!layer.values || !fieldExtent);
 
   // Single source of truth for "is this point ocean, land, or outside the
   // NEER domain" (lib/pointClassification.js) — used for the hover tooltip,
@@ -664,7 +681,13 @@ export default function OceanMap({
 
   const readoutPoint = hover ?? activeSelected ?? null;
   const readoutStatus = hover ? hoverStatus : selectedStatus;
-  const readoutValue = lookupFieldValue(layer.grid, layer.values, readoutPoint);
+  // While a new date/depth field is loading, the previous one stays drawn
+  // (dimmed) but every NUMBER read off the map — cursor readout, hover
+  // tooltip, selection announcement — comes only from a field that matches
+  // the selected date/depth, so a value is never reported under the wrong
+  // date or depth.
+  const currentGrid = layer.isStale ? null : layer.grid;
+  const readoutValue = lookupFieldValue(currentGrid, layer.values, readoutPoint);
   const readoutValueText =
     readoutStatus && readoutStatus !== POINT_STATUS.OCEAN
       ? "N/A"
@@ -682,9 +705,9 @@ export default function OceanMap({
   // both are derivable from one fetched response regardless of which tab
   // (sst/anomaly) is active.
   const hoverTemperature =
-    hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(layer.grid, layer.temperatureValues, hover) : null;
+    hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(currentGrid, layer.temperatureValues, hover) : null;
   const hoverAnomaly =
-    hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(layer.grid, layer.anomalyValues, hover) : null;
+    hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(currentGrid, layer.anomalyValues, hover) : null;
 
   // Outline of the selected grid cell, in world space (scales with the map).
   const selectedCellRect = useMemo(() => {
@@ -697,7 +720,7 @@ export default function OceanMap({
 
   // Screen-reader announcement for the current selection (polite live region).
   const selectedValue =
-    selectedStatus === POINT_STATUS.OCEAN ? lookupFieldValue(layer.grid, layer.values, activeSelected) : null;
+    selectedStatus === POINT_STATUS.OCEAN ? lookupFieldValue(currentGrid, layer.values, activeSelected) : null;
   const selectionAnnouncement = activeSelected
     ? `Selected ${formatLat(activeSelected.lat)}, ${formatLon(activeSelected.lon)}. ${
         selectedStatus === POINT_STATUS.OCEAN
@@ -812,6 +835,12 @@ export default function OceanMap({
           <MoveVertical size={13} strokeWidth={1.75} aria-hidden="true" />
           <span className="font-mono text-text-secondary">{formatDepth(depth)}</span>
         </span>
+        {layer.isStale && layer.fieldContext && layer.isUpdating && (
+          <span className="flex items-center gap-1.5 text-warning" role="status">
+            <AlertTriangle size={13} strokeWidth={1.75} aria-hidden="true" />
+            Updating — still showing {formatDate(layer.fieldContext.date)} · {formatDepth(layer.fieldContext.depth)}
+          </span>
+        )}
       </div>
 
       {/* Map surface */}
@@ -859,6 +888,7 @@ export default function OceanMap({
               values={layer.values}
               colorMapper={colorMapper}
               visible={layerVisibility.temperatureField}
+              opacity={layer.isUpdating ? 0.4 : undefined}
             />
 
             {/* Real 0.25° NEER scientific grid — drawn over the field so
@@ -972,14 +1002,21 @@ export default function OceanMap({
 
         {/* Scientific field — loading state. Non-blocking: the base map
             stays interactive while GET /reconstruct/grid is in flight. */}
-        {layer.supported && layerVisibility.temperatureField && layer.isLoading && (
-          <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border-strong bg-surface-overlay/95 px-3 py-1.5 shadow-raised">
+        {layer.supported && layerVisibility.temperatureField && layer.isUpdating && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center gap-1.5 rounded-2xl border border-border-strong bg-surface-overlay/95 px-3 py-1.5 shadow-raised"
+          >
             <LoadingSkeleton
               variant="text"
               lines={1}
-              label={`Loading ${activeLabel?.toLowerCase()} field`}
+              label={`Loading ${activeLabel?.toLowerCase()} field for ${formatDate(date)}, ${formatDepth(depth)}`}
               className="w-40"
             />
+            <span className="font-mono text-caption text-text-secondary">
+              {formatDate(date)} · {formatDepth(depth)}
+            </span>
           </div>
         )}
 
@@ -995,7 +1032,7 @@ export default function OceanMap({
           >
             <ErrorState
               className="pointer-events-auto w-full max-w-sm bg-surface-overlay/95 py-5 shadow-raised"
-              title="Field data unavailable"
+              title={`Field unavailable for ${formatDate(date)} · ${formatDepth(depth)}`}
               message={layer.error?.message ?? "The scientific field could not be loaded."}
               onRetry={layer.retry}
             />
@@ -1010,7 +1047,7 @@ export default function OceanMap({
           <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-full border border-border-strong bg-surface-overlay/95 px-3 py-1.5 shadow-raised">
             <StatusIndicator
               status="warning"
-              label={`No ${activeLabel?.toLowerCase()} field available for this date`}
+              label={`No ${activeLabel?.toLowerCase()} field available for ${formatDate(date)} · ${formatDepth(depth)}`}
               size="sm"
             />
           </div>

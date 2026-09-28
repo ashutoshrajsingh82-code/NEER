@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { gridEdgeLines } from "./GridOverlay";
-import { MAX_GRID_POINTS, boundsContain, estimateCells, planRequestBounds, subtractGrids } from "./useOceanMapLayer";
+import {
+  GRID_CACHE_LIMIT,
+  MAX_GRID_POINTS,
+  boundsContain,
+  estimateCells,
+  fieldContextMatches,
+  gridCacheKey,
+  isRequestableDepth,
+  planRequestBounds,
+  rememberInCache,
+  subtractGrids,
+} from "./useOceanMapLayer";
 import { OCEAN_DOMAIN, toGridSelection } from "@/lib/oceanDomain";
 
 describe("gridEdgeLines — grid aligned with the scientific cells", () => {
@@ -104,5 +115,47 @@ describe("toGridSelection — click → grid cell", () => {
 describe("subtractGrids — missing values are never invented", () => {
   it("yields null for a cell missing in either grid", () => {
     expect(subtractGrids([[1, null], [3, 4]], [[0.5, 1], [null, 1]])).toEqual([[0.5, null], [null, 3]]);
+  });
+});
+
+describe("date/depth-driven map requests (Phase 36B)", () => {
+  const region = { latMin: 10, latMax: 20, lonMin: 60, lonMax: 70 };
+
+  it("only a real, non-negative depth is requestable — null must never mean 'all depths'", () => {
+    expect(isRequestableDepth(0)).toBe(true);
+    expect(isRequestableDepth(1000)).toBe(true);
+    expect(isRequestableDepth(null)).toBe(false);
+    expect(isRequestableDepth(undefined)).toBe(false);
+    expect(isRequestableDepth(NaN)).toBe(false);
+    expect(isRequestableDepth(-5)).toBe(false);
+  });
+
+  it("a change of date OR depth OR region is a different request; identical inputs are the same one", () => {
+    const base = gridCacheKey({ date: "2020-01-01", depth: 10, ...region });
+    expect(gridCacheKey({ date: "2020-01-01", depth: 10, ...region })).toBe(base);
+    expect(gridCacheKey({ date: "2020-01-02", depth: 10, ...region })).not.toBe(base);
+    expect(gridCacheKey({ date: "2020-01-01", depth: 20, ...region })).not.toBe(base);
+    expect(gridCacheKey({ date: "2020-01-01", depth: 10, ...region, lonMax: 71 })).not.toBe(base);
+  });
+
+  it("a held field is 'current' only for exactly its own date and depth", () => {
+    const ctx = { date: "2020-01-01", depth: 10 };
+    expect(fieldContextMatches(ctx, { date: "2020-01-01", depth: 10 })).toBe(true);
+    expect(fieldContextMatches(ctx, { date: "2020-01-02", depth: 10 })).toBe(false);
+    expect(fieldContextMatches(ctx, { date: "2020-01-01", depth: 0 })).toBe(false);
+    expect(fieldContextMatches(null, { date: "2020-01-01", depth: 10 })).toBe(false);
+  });
+
+  it("the response cache is a bounded LRU (revisiting a date/depth is free, memory is capped)", () => {
+    const cache = new Map();
+    for (let i = 0; i < GRID_CACHE_LIMIT + 3; i += 1) rememberInCache(cache, `k${i}`, i);
+    expect(cache.size).toBe(GRID_CACHE_LIMIT);
+    expect(cache.has("k0")).toBe(false);
+    expect(cache.has(`k${GRID_CACHE_LIMIT + 2}`)).toBe(true);
+    // touching an entry refreshes it so it outlives newer-but-untouched ones
+    rememberInCache(cache, "k3", 3);
+    rememberInCache(cache, "fresh", 1);
+    expect(cache.has("k3")).toBe(true);
+    expect(cache.has("k4")).toBe(false);
   });
 });

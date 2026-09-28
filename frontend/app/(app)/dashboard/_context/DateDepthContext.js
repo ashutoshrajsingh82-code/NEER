@@ -1,7 +1,8 @@
+
 "use client";
 
 // -----------------------------------------------------------------------------
-// NEER — DateDepthContext  (Phase 36A)
+// NEER — DateDepthContext (Phase 36A)
 //
 // The one shared instance of the backend-driven date/depth state model
 // (lib/useDateDepth.js over lib/dateDepthModel.js). Mounted once in the (app)
@@ -25,25 +26,46 @@ const DateDepthContext = createContext(null);
 
 export function DateDepthProvider({ children }) {
   const value = useDateDepth();
-  return <DateDepthContext.Provider value={value}>{children}</DateDepthContext.Provider>;
+
+  return (
+    <DateDepthContext.Provider value={value}>
+      {children}
+    </DateDepthContext.Provider>
+  );
 }
 
 /**
  * @returns {ReturnType<typeof useDateDepth>} — see lib/useDateDepth.js for
  *   the full field list. Key fields:
- *   - `selectedDate`: "YYYY-MM-DD" | null   (null until /dates succeeds)
+ *
+ *   - `selectedDate`: "YYYY-MM-DD" | null
+ *       null until /dates succeeds
+ *
  *   - `selectedDepth`: number (m) | null
- *   - `availableDates`: string[] (ascending), `availableDepths`: number[]
+ *
+ *   - `availableDates`: string[] (ascending)
+ *
+ *   - `availableDepths`: number[]
+ *
  *   - `isReady`: both selected — safe to run date/depth-parameterised queries
- *   - `selectDate(date)` / `selectDepth(depth)`: only values in the
- *     available lists are accepted; return `true` if honoured
- *   - `stepDate(±1)`: move to the adjacent *available* date
- *   - `datesStatus` / `depthsStatus`: "loading" | "success" | "empty" | "error"
+ *
+ *   - `selectDate(date)` / `selectDepth(depth)`:
+ *       only values in the available lists are accepted;
+ *       return `true` if honoured
+ *
+ *   - `stepDate(±1)`:
+ *       move to the adjacent available date
+ *
+ *   - `datesStatus` / `depthsStatus`:
+ *       "loading" | "success" | "empty" | "error"
  */
 export function useDateDepthContext() {
   const context = useContext(DateDepthContext);
+
   if (!context) {
-    throw new Error("useDateDepthContext must be used within a <DateDepthProvider>.");
+    throw new Error(
+      "useDateDepthContext must be used within a <DateDepthProvider>."
+    );
   }
   return context;
 }

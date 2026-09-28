@@ -116,6 +116,40 @@ export function subtractGrids(a, b) {
   return a - b;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 36B — date/depth-driven requests
+// ---------------------------------------------------------------------------
+
+/** Most recent grid responses kept so stepping back to a date/depth just viewed is instant. */
+export const GRID_CACHE_LIMIT = 12;
+
+/**
+ * A depth is only requestable when it is a real, finite, non-negative number.
+ * `reconstructGrid` treats a missing depth as "return EVERY depth level" (a 3D
+ * array this 2D map can't draw), so a not-yet-known depth (null before GET
+ * /model/info answers) must never be sent as "no depth".
+ */
+export function isRequestableDepth(depth) {
+  return typeof depth === "number" && Number.isFinite(depth) && depth >= 0;
+}
+
+/** Identity of one GET /reconstruct/grid response: date + depth + region. */
+export function gridCacheKey({ date, depth, latMin, latMax, lonMin, lonMax }) {
+  return [String(date), depth, latMin.toFixed(2), latMax.toFixed(2), lonMin.toFixed(2), lonMax.toFixed(2)].join("|");
+}
+
+/** True when a loaded field belongs to exactly the requested date and depth. */
+export function fieldContextMatches(context, { date, depth }) {
+  return Boolean(context) && context.date === String(date) && context.depth === depth;
+}
+
+/** Inserts into an insertion-ordered Map used as a small LRU. */
+export function rememberInCache(cache, key, value, limit = GRID_CACHE_LIMIT) {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > limit) cache.delete(cache.keys().next().value);
+}
+
 /**
  * @param {object} params
  * @param {string} params.variable - active VARIABLE_TABS value, e.g. "sst"
@@ -139,6 +173,9 @@ export function subtractGrids(a, b) {
  *   grid: {lat: number[], lon: number[], depth: number|null, depths: number[]|null}|null,
  *   estimatedCells: number,
  *   tooLargeForCellLimit: boolean,
+ *   fieldContext: {date: string, depth: number}|null,  // date/depth the drawn field belongs to
+ *   isStale: boolean,     // a field is held but it is for a different date/depth than requested
+ *   isUpdating: boolean,  // a new date/depth field is being fetched (previous one may still be drawn)
  * }}
  */
 const UNKNOWN_VARIABLE = Object.freeze({ supported: false, reason: "Unknown variable" });
@@ -169,9 +206,34 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
         : { latMin: viewLatMin, latMax: viewLatMax, lonMin: viewLonMin, lonMax: viewLonMax },
     [hasValidBounds, viewLatMin, viewLatMax, viewLonMin, viewLonMax]
   );
-  const canFetch = isSupported && hasValidBounds && !tooLargeForCellLimit && Boolean(date);
+  const canFetch =
+    isSupported && hasValidBounds && !tooLargeForCellLimit && Boolean(date) && isRequestableDepth(depth);
 
-  const { data, error, status, isLoading, isError, run, reset } = useApiRequest(reconstructGrid);
+  // Every grid request goes through frontend/lib/api.js's reconstructGrid. The
+  // wrapper adds two things, neither of which invents data:
+  //   - a small LRU of real responses, so returning to a date/depth/region
+  //     already fetched (previous <-> next, chip back and forth) costs no request;
+  //   - a record of which date/depth each response belongs to (WeakMap keyed by
+  //     the response object), so the hook can tell when the field on screen is
+  //     for a DIFFERENT selection than the one now requested ("stale").
+  const cacheRef = useRef(new Map());
+  const contextRef = useRef(new WeakMap());
+  const fetchGrid = useCallback(async (params) => {
+    const key = gridCacheKey(params);
+    const cached = cacheRef.current.get(key);
+    if (cached) {
+      rememberInCache(cacheRef.current, key, cached);
+      return cached;
+    }
+    const response = await reconstructGrid(params);
+    if (response && typeof response === "object") {
+      contextRef.current.set(response, { date: String(params.date), depth: params.depth });
+      rememberInCache(cacheRef.current, key, response);
+    }
+    return response;
+  }, []);
+
+  const { data, error, status, isLoading, isError, run, reset } = useApiRequest(fetchGrid);
 
   // Keyed on the variable *family* (both "sst" and "anomaly" read the same
   // /reconstruct/grid response) rather than the variable itself, so
@@ -212,6 +274,10 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
       return;
     }
 
+    // Debounce rapid changes (slider drag, key repeat) so only the value the
+    // user settles on is requested — but a response we already hold needs no
+    // waiting.
+    const delay = cacheRef.current.has(gridCacheKey({ date, depth, latMin, latMax, lonMin, lonMax })) ? 0 : 200;
     const timer = setTimeout(() => {
       lastKeyRef.current = requestKey;
       loadedRef.current = { sig: paramsSig, bounds: { latMin, latMax, lonMin, lonMax } };
@@ -219,7 +285,7 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
         // Swallowed here on purpose — `error`/`isError` below already
         // capture the failure for the caller to render.
       });
-    }, 200);
+    }, delay);
 
     return () => {
       clearTimeout(timer);
@@ -227,14 +293,28 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canFetch, requestKey]);
 
+  // Which date/depth the response currently held is for, and whether that
+  // differs from what is now selected.
+  //   - while the new field is on its way, the previous valid field stays
+  //     drawn (`isUpdating`; the map dims it and says which date/depth it is);
+  //   - if the new field FAILED, the old one is dropped: showing another
+  //     date's/depth's temperatures under the newly selected label would be
+  //     wrong, and the error state explains why the map is blank.
+  const fieldContext = data ? (contextRef.current.get(data) ?? null) : null;
+  const isStale = Boolean(data) && !fieldContextMatches(fieldContext, { date, depth });
+  const keepPreviousField = isStale && canFetch && !isError;
+  const fieldData = data && isSupported && (!isStale || keepPreviousField) ? data : null;
+  const isUpdating = canFetch && (isLoading || (isStale && !isError));
+
   const values = useMemo(() => {
+    const data = fieldData;
     if (!data || !isSupported) return null;
     if (fieldName === "temperature") return data.temperature;
     if (fieldName === "anomaly") {
       return data.climatology ? subtractGrids(data.temperature, data.climatology) : null;
     }
     return null;
-  }, [data, isSupported, fieldName]);
+  }, [fieldData, isSupported, fieldName]);
 
   // Phase 35C-B: the hover tooltip (OceanMap.js) shows temperature *and*
   // anomaly together, regardless of which single variable tab is active —
@@ -244,20 +324,20 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
   // `null` here exactly when it would have above (no `climatology` for
   // this date), rather than silently falling back to something else.
   const temperatureValues = useMemo(() => {
-    if (!data || !isSupported) return null;
-    return data.temperature ?? null;
-  }, [data, isSupported]);
+    if (!fieldData || !isSupported) return null;
+    return fieldData.temperature ?? null;
+  }, [fieldData, isSupported]);
 
   const anomalyValues = useMemo(() => {
-    if (!data || !isSupported) return null;
-    return data.climatology ? subtractGrids(data.temperature, data.climatology) : null;
-  }, [data, isSupported]);
+    if (!fieldData || !isSupported) return null;
+    return fieldData.climatology ? subtractGrids(fieldData.temperature, fieldData.climatology) : null;
+  }, [fieldData, isSupported]);
 
   // Memoized: a new object identity per render would defeat the memoization
   // of every consumer (TemperatureLayer re-derives all its cells from `grid`).
   const grid = useMemo(
-    () => (data ? { lat: data.lat, lon: data.lon, depth: data.depth, depths: data.depths } : null),
-    [data]
+    () => (fieldData ? { lat: fieldData.lat, lon: fieldData.lon, depth: fieldData.depth, depths: fieldData.depths } : null),
+    [fieldData]
   );
 
   // Re-issues the same request after a failure (e.g. a transient network
@@ -288,6 +368,9 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
     estimatedCells,
     tooLargeForCellLimit,
     retry,
+    fieldContext,
+    isStale,
+    isUpdating,
   };
 }
 

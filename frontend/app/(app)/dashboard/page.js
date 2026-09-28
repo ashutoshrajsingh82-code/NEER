@@ -24,6 +24,11 @@
 //                         Server Component — it exports `metadata` below)
 //                         doesn't itself need to call a hook.
 //
+// Phase 36B: the date/depth controls (calendar, previous/next, depth slider +
+// chips) moved out of the compact operational card into their own panel
+// (DataContextSection) — there is now too much control surface to share a row
+// with system status and model version. See that file for the sync chain.
+//
 // Phase 34E completes the synchronization chain the phase spec describes —
 // Date selection -> Map context -> Point selection -> Inspection panel -> KPI
 // information — by making DataContextSection's date/depth controls (not just
@@ -41,25 +46,28 @@ import MissionHeader from "./_components/MissionHeader";
 import SystemStatusPanel from "./_components/SystemStatusPanel";
 import DataContextSection from "./_components/DataContextSection";
 import ModelContextPanel from "./_components/ModelContextPanel";
+import { MapFieldStatusProvider } from "./_context/MapFieldStatusContext";
 
 export const metadata = { title: "Dashboard — NEER" };
 
 export default function DashboardPage() {
   return (
-    <div className="mx-auto flex max-w-[1600px] flex-col gap-5">
-      <MissionHeader />
+    <MapFieldStatusProvider>
+      <div className="mx-auto flex max-w-[1600px] flex-col gap-5">
+        <MissionHeader />
 
-      <Panel emphasis="base" bodyClassName="flex flex-col gap-5 lg:flex-row lg:items-stretch lg:gap-0">
-        <SystemStatusPanel state="operational" detail="All subsystems nominal" className="lg:pr-6" />
-        <DataContextSection className="lg:border-l lg:border-border-subtle lg:px-6" />
-        <ModelContextPanel
-          version="v1.3.0"
-          updatedAt="12 Mar 2024"
-          className="lg:border-l lg:border-border-subtle lg:pl-6"
-        />
-      </Panel>
+        <Panel emphasis="base" bodyClassName="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+          <SystemStatusPanel state="operational" detail="All subsystems nominal" />
+          <ModelContextPanel version="v1.3.0" updatedAt="12 Mar 2024" className="sm:border-l sm:border-border-subtle sm:pl-6" />
+        </Panel>
 
-      <OceanMapSection />
-    </div>
+        {/* Phase 36B: date/depth controls — calendar, previous/next, depth
+            slider + chips. One shared state (DateDepthContext) drives them,
+            the map below, PointInspection and the KPI drawer. */}
+        <DataContextSection />
+
+        <OceanMapSection />
+      </div>
+    </MapFieldStatusProvider>
   );
 }

@@ -6,7 +6,7 @@
 //
 // Cross-tree state for the dashboard route: the selected map point, the
 // current data-mode "view", and the one shared `reconstruct()` request for
-// the current selection. OceanMap (via OceanMapSection), DataContextPanel
+// the current selection. OceanMap (via OceanMapSection), DataContextSection
 // (via DataContextSection), PointInspection and the KPI drawer are siblings
 // under AppShell, so a context above all of them is how a change reaches
 // components none of them render directly (see app/(app)/layout.js).
@@ -34,7 +34,7 @@
 //     result, so a consumer can never show point A's number under point B.
 // -----------------------------------------------------------------------------
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, reconstruct } from "@/lib/api";
 import { useApiRequest } from "@/lib/useApiRequest";
 import { classifyPointLocation, isQueryablePoint } from "@/lib/pointClassification";
@@ -44,6 +44,9 @@ import { useDateDepthContext } from "../../_context/DateDepthContext";
 const PointInspectionContext = createContext(null);
 
 const DEFAULT_DATA_MODE = "reconstructed";
+
+/** Settle time for a changed point/date/depth before GET /reconstruct is re-issued (see the effect below). */
+const POINT_REQUEST_DEBOUNCE_MS = 150;
 
 /**
  * @param {"reconstructed"|"observed"|"blended"} dataMode
@@ -96,17 +99,32 @@ export function PointInspectionProvider({ children, dataMode = DEFAULT_DATA_MODE
   const [requestedKey, setRequestedKey] = useState(null);
   const [retryToken, setRetryToken] = useState(0);
 
+  // Phase 36B: dragging the depth slider or holding an arrow key on the depth
+  // chips changes the key many times a second. Once a first request has been
+  // made, a change waits briefly so only the value the user settles on is
+  // requested; `isPending` (requestedKey lagging requestKey) reports "loading"
+  // for that whole gap, so nothing stale is shown while waiting. The very
+  // first request for a selection goes out immediately.
+  const hasRequestedRef = useRef(false);
   useEffect(() => {
     if (requestKey === null) {
       resetReconstruct();
       setRequestedKey(null);
-      return;
+      hasRequestedRef.current = false;
+      return undefined;
     }
-    setRequestedKey(requestKey);
-    runReconstruct({ lat: selectedPoint.lat, lon: selectedPoint.lon, date, depth }).catch(() => {
-      // Swallowed on purpose — pointError/pointIsError capture the failure
-      // for consumers to render their own error states.
-    });
+    const timer = setTimeout(
+      () => {
+        hasRequestedRef.current = true;
+        setRequestedKey(requestKey);
+        runReconstruct({ lat: selectedPoint.lat, lon: selectedPoint.lon, date, depth }).catch(() => {
+          // Swallowed on purpose — pointError/pointIsError capture the failure
+          // for consumers to render their own error states.
+        });
+      },
+      hasRequestedRef.current ? POINT_REQUEST_DEBOUNCE_MS : 0
+    );
+    return () => clearTimeout(timer);
     // requestKey encodes lat/lon/date/depth; the rest are stable callbacks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestKey, retryToken]);
