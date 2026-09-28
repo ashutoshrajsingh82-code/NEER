@@ -21,7 +21,7 @@
 
 import { OceanMap } from "@/components/ocean-map";
 import { usePointInspection } from "../_context/PointInspectionContext";
-import { useMapFieldStatus } from "../_context/MapFieldStatusContext";
+import { useMapFieldStatus } from "./MapFieldStatusContext";
 
 export default function OceanMapSection() {
   const { dataMode, date, depth, selectedPoint, selectPoint } = usePointInspection();

@@ -39,7 +39,7 @@ import { ApiError, reconstruct } from "@/lib/api";
 import { useApiRequest } from "@/lib/useApiRequest";
 import { classifyPointLocation, isQueryablePoint } from "@/lib/pointClassification";
 import { isOnLand } from "@/components/ocean-map/landmask";
-import { useDateDepthContext } from "../../_context/DateDepthContext";
+import { useDateDepthContext } from "./DateDepthContext";
 
 const PointInspectionContext = createContext(null);
 

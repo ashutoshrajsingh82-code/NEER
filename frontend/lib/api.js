@@ -1,65 +1,37 @@
 // -----------------------------------------------------------------------------
-// NEER Frontend — API client  (Phase 33A foundation + Phase 33B endpoints)
+// NEER Frontend API Client
 //
-// The single place the Next.js frontend talks to the NEER FastAPI backend.
-// Nothing else in this app should call fetch() against the backend, build a
-// backend URL, or parse a backend error body directly — every endpoint
-// function below is a thin wrapper over `apiRequest`/`get`/`post`, and every
-// component is meant to consume only the normalized `ApiError` shape this
-// file produces. Still not called from any page/component yet (Phase 33B
-// requirement) — that starts once real pages are built.
+// Centralized API communication layer for the NEER frontend.
 //
-// Deliberately framework-independent (Requirement 8, Phase 33A): no
-// Next.js-specific imports, no "use client" directive, no dependency on
-// React. It only relies on the global fetch/AbortController/
-// URLSearchParams/FormData, all available in both the browser and Next's
-// server/edge runtimes, so this same module works unchanged from Server
-// Components, Route Handlers, or client code.
+// Responsibilities:
+// - API base URL management
+// - GET / POST requests
+// - timeout and abort handling
+// - HTTP error normalization
+// - response parsing
+// - date normalization
+// - backend response validation
+// - scientific data endpoints
 //
-// Error normalization is deliberately shaped around the backend's own
-// contract (see backend/app/errors.py — every NeerApiError.body() returns
-// `{ error: <code>, detail: <message>, ...extra }`) so a component can
-// branch on the *same* stable error codes the backend defines (e.g.
-// "date_not_found", "model_unavailable") via ApiError.code, without
-// re-deriving them here.
-//
-// Phase 33B's endpoint functions (health, modelInfo, dates, reconstruct,
-// reconstructGrid, profile) were written by reading the actual FastAPI
-// routers and Pydantic schemas — backend/app/routers/{health,model_info,
-// dates,reconstruct,profile}.py and backend/app/schemas.py — rather than
-// assumed, so every parameter name, type, and requiredness below matches
-// what the backend actually accepts today.
-//
-// Phase 33C adds the remaining "scientific" endpoints — embedding, metrics,
-// argoEvaluation, explainability, dataQuality, netcdfExport — read the same
-// way, straight off backend/app/routers/{embedding,metrics,evaluation,
-// explainability,data_quality,reconstruct_netcdf}.py and their
-// EmbeddingQueryParams/MetricsQueryParams/ArgoEvaluationQueryParams/
-// ExplainabilityQueryParams/GridQueryParams schemas. `/reconstruct/netcdf`
-// is the one endpoint in this module that doesn't return JSON (it's a
-// `FileResponse`), so `apiRequest` grows a `responseType: "blob"` mode
-// (still the single fetch/error-handling path — see Requirement 7) rather
-// than that endpoint reaching for its own fetch call. Every NEER backend
-// route now has a wrapper here.
+// Phase 37A:
+// - runReconstruction()
 // -----------------------------------------------------------------------------
 
-import { parseDatesPayload } from "./dateDepthModel.js";
+import {
+  isIsoDate,
+  parseDatesPayload,
+} from "./dateDepthModel.js";
 
-/**
- * Default request timeout. Generous enough for slower calls later phases
- * will add (e.g. model inference), but still short enough that a hung
- * connection surfaces as a normalized error instead of hanging the UI
- * forever. Pass `timeoutMs: null` per-call to disable it — e.g. when the
- * caller supplies its own long-lived AbortSignal.
- */
+import {
+  validatePointReconstruction,
+} from "./reconstructionResponse.js";
+
+// -----------------------------------------------------------------------------
+// Configuration
+// -----------------------------------------------------------------------------
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-/**
- * Stable, machine-readable codes for failures this module produces itself,
- * as opposed to codes like "date_not_found" that come straight from the
- * backend's own `error` field and are passed through on ApiError.code
- * unchanged.
- */
 export const API_ERROR_CODES = {
   CONFIG: "config_error",
   NETWORK: "network_error",
@@ -70,720 +42,798 @@ export const API_ERROR_CODES = {
   HTTP: "http_error",
 };
 
-/**
- * Normalized shape every failure from this module takes (Requirement 4) —
- * components never need to branch on whether a failure was a network drop,
- * a timeout, a malformed body, or a real backend error response; they can
- * always read `.code`, `.message`, `.status`, and `.details`.
- */
+// -----------------------------------------------------------------------------
+// ApiError
+// -----------------------------------------------------------------------------
+
 export class ApiError extends Error {
-  /**
-   * @param {object} shape
-   * @param {string} shape.message - human-readable; safe to show or log directly
-   * @param {string} shape.code - one of API_ERROR_CODES, or a backend
-   *   error_code (backend/app/errors.py) passed through as-is
-   * @param {number|null} [shape.status] - HTTP status, or null when the
-   *   request never got a response (network error, timeout, bad config)
-   * @param {*} [shape.details] - extra machine-readable context: the
-   *   backend's `extra` fields, the raw FastAPI validation-error array, or null
-   */
-  constructor({ message, code, status = null, details = null }) {
-    super(message);
+  constructor({
+    code,
+    message,
+    status = null,
+    details = null,
+    cause = null,
+  } = {}) {
+    super(message || "API request failed");
+
     this.name = "ApiError";
-    this.code = code;
+    this.code = code || API_ERROR_CODES.NETWORK;
     this.status = status;
     this.details = details;
+    this.cause = cause;
   }
 }
 
-/**
- * Coarse, UI-facing failure category for any thrown value — lets a component
- * choose wording/iconography ("backend unreachable" vs "backend said no" vs
- * "backend sent garbage") without switching over every individual code.
- * @param {*} error
- * @returns {"network"|"timeout"|"config"|"invalid_response"|"aborted"|"api"|"unknown"}
- *   "api" = the backend answered with an error status (incl. 503s like
- *   data_unavailable / model_unavailable).
- */
+// -----------------------------------------------------------------------------
+// Error categorization
+// -----------------------------------------------------------------------------
+
 export function categorizeApiError(error) {
-  if (!(error instanceof ApiError)) return "unknown";
-  switch (error.code) {
-    case API_ERROR_CODES.NETWORK:
-      return "network";
-    case API_ERROR_CODES.TIMEOUT:
-      return "timeout";
-    case API_ERROR_CODES.CONFIG:
-      return "config";
-    case API_ERROR_CODES.INVALID_RESPONSE:
-      return "invalid_response";
-    case API_ERROR_CODES.ABORTED:
-      return "aborted";
-    default:
-      return typeof error.status === "number" ? "api" : "unknown";
+  if (error instanceof ApiError) {
+    return error;
   }
-}
 
-/**
- * Reads and validates the backend origin (Requirement 1). Called lazily,
- * once per request, rather than at module load — importing this file must
- * never crash a build/test that hasn't set the env var yet; the error only
- * surfaces once something actually tries to make a request.
- */
-function getBaseUrl() {
-  const raw = process.env.NEXT_PUBLIC_API_URL;
-  if (!raw || !raw.trim()) {
-    throw new ApiError({
-      code: API_ERROR_CODES.CONFIG,
-      message:
-        "NEXT_PUBLIC_API_URL is not set. Configure it in the environment (e.g. .env.local) " +
-        "to the NEER FastAPI backend's origin, e.g. http://localhost:8000.",
+  if (error?.name === "AbortError") {
+    return new ApiError({
+      code: API_ERROR_CODES.ABORTED,
+      message: "The API request was aborted.",
+      cause: error,
     });
   }
-  // Strip trailing slash(es) so joinUrl never has to worry about doubling up.
-  return raw.trim().replace(/\/+$/, "");
-}
 
-/** Joins a base origin and a path into one URL with exactly one slash between them. */
-function joinUrl(base, path) {
-  const cleanPath = `/${String(path).replace(/^\/+/, "")}`;
-  return `${base}${cleanPath}`;
-}
-
-/**
- * Appends `params` onto `url` as a query string (Requirements 3/6). Every
- * value is encoded via URLSearchParams — never hand-built string
- * concatenation — so arbitrary characters are always safely
- * percent-encoded. `null`/`undefined` values (and array elements) are
- * skipped entirely rather than serialized as the literal string
- * "null"/"undefined"; arrays repeat the key once per element
- * (`tag=a&tag=b`), the common REST convention for multi-value params.
- */
-function withQuery(url, params) {
-  if (!params) return url;
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === null) continue;
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        if (item === undefined || item === null) continue;
-        search.append(key, String(item));
-      }
-    } else {
-      search.append(key, String(value));
-    }
-  }
-  const query = search.toString();
-  return query ? `${url}?${query}` : url;
-}
-
-/**
- * Reads and parses a fetch Response's body, tolerating the two "malformed
- * response" cases a real backend can hand back (Requirement 3): no body at
- * all (204/205, or an empty 200), and a body that claims to be JSON but
- * isn't actually parseable. Only throws on a genuinely unparseable
- * non-empty body — the caller turns that into an INVALID_RESPONSE ApiError,
- * preserving the raw text for debugging.
- */
-async function parseBody(response) {
-  const text = await response.text();
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    const error = new Error("invalid_json");
-    error.rawText = text;
-    throw error;
-  }
-}
-
-/**
- * Pulls a filename out of a `Content-Disposition: attachment; filename="...";
- * filename*=UTF-8''...` header (Requirement: export parameters / correctly
- * handle what the backend sends). Prefers the RFC 5987 `filename*` form
- * (percent-decoded) when present, since that's the one that survives
- * non-ASCII names; falls back to the plain `filename=` form; returns `null`
- * if the header is missing or unparseable, letting the caller fall back to
- * its own default rather than throwing over a cosmetic detail.
- * @param {string|null} headerValue
- * @returns {string|null}
- */
-function filenameFromContentDisposition(headerValue) {
-  if (!headerValue) return null;
-  const starMatch = /filename\*\s*=\s*[^']*''([^;]+)/i.exec(headerValue);
-  if (starMatch) {
-    try {
-      return decodeURIComponent(starMatch[1].trim());
-    } catch {
-      // fall through to the plain form below
-    }
-  }
-  const plainMatch = /filename\s*=\s*"?([^";]+)"?/i.exec(headerValue);
-  return plainMatch ? plainMatch[1].trim() : null;
-}
-
-/**
- * Turns a non-ok HTTP response into an ApiError, preferring the backend's
- * own `{ error, detail, ...extra }` shape (backend/app/errors.py) when
- * present, so components can branch on the exact same error_code the
- * backend defines. Falls back to FastAPI's default request-validation shape
- * (`{ detail: [...] }`), then a plain `{ detail: "..." }`, then a fully
- * generic HTTP error for anything else.
- */
-function errorFromResponse(response, body) {
-  if (body && typeof body === "object" && !Array.isArray(body)) {
-    if (typeof body.error === "string") {
-      const { error, detail, ...extra } = body;
-      return new ApiError({
-        code: error,
-        message: typeof detail === "string" ? detail : response.statusText || "Request failed",
-        status: response.status,
-        details: Object.keys(extra).length ? extra : null,
-      });
-    }
-    if (Array.isArray(body.detail)) {
-      return new ApiError({
-        code: API_ERROR_CODES.VALIDATION,
-        message: "The request was rejected as invalid.",
-        status: response.status,
-        details: body.detail,
-      });
-    }
-    if (typeof body.detail === "string") {
-      return new ApiError({
-        code: API_ERROR_CODES.HTTP,
-        message: body.detail,
-        status: response.status,
-        details: null,
-      });
-    }
-  }
   return new ApiError({
-    code: API_ERROR_CODES.HTTP,
-    message: response.statusText || `Request failed with status ${response.status}`,
-    status: response.status,
-    details: body ?? null,
+    code: API_ERROR_CODES.NETWORK,
+    message: error?.message || "Network request failed.",
+    cause: error,
   });
 }
 
-/**
- * The one place a fetch() call to the backend is actually made (Requirement
- * 7) — every endpoint function later phases add is meant to be a thin
- * wrapper over this, so HTTP mechanics, query encoding, and error handling
- * live in exactly one place.
- *
- * @param {string} path - backend path, e.g. "/dates" (leading slash optional)
- * @param {object} [options]
- * @param {"GET"|"POST"|"PUT"|"PATCH"|"DELETE"} [options.method="GET"]
- * @param {Object<string, *>} [options.params] - query parameters (any method)
- * @param {*} [options.body] - request body; plain objects/arrays are
- *   JSON-encoded automatically (Content-Type set to application/json);
- *   strings and FormData are sent through as-is
- * @param {Object<string, string>} [options.headers] - merged over the defaults
- * @param {AbortSignal} [options.signal] - caller-supplied cancellation; when
- *   provided, the internal timeout below is skipped — the caller owns
- *   cancellation semantics
- * @param {number|null} [options.timeoutMs] - aborts the request after this
- *   many ms when no `signal` was supplied (default DEFAULT_TIMEOUT_MS);
- *   pass `null` to disable
- * @param {"json"|"blob"} [options.responseType="json"] - "json" parses the
- *   body as JSON (the default, right for every endpoint except the NetCDF
- *   export); "blob" is for binary downloads (e.g. `/reconstruct/netcdf`) —
- *   on success the raw bytes are returned as a `Blob` alongside the
- *   filename from `Content-Disposition`, without ever running them through
- *   `JSON.parse`. A non-ok response is still parsed as JSON either way,
- *   since the backend's error bodies (`backend/app/errors.py`) are always
- *   JSON regardless of what the successful response would have been.
- * @returns {Promise<*>} the parsed JSON body (or `null` for an empty body)
- *   when `responseType` is "json"; `{ blob, filename, contentType }` when
- *   it's "blob"
- * @throws {ApiError} always — every failure mode (config, network, timeout,
- *   abort, malformed body, HTTP error) is normalized before it reaches the caller
- */
+// -----------------------------------------------------------------------------
+// Base URL
+// -----------------------------------------------------------------------------
+
+export function getBaseUrl() {
+  const value = process.env.NEXT_PUBLIC_API_URL;
+
+  if (!value || typeof value !== "string") {
+    throw new ApiError({
+      code: API_ERROR_CODES.CONFIG,
+      message:
+        "NEXT_PUBLIC_API_URL is not configured. Set it in the frontend environment.",
+    });
+  }
+
+  return value.replace(/\/+$/, "");
+}
+
+// -----------------------------------------------------------------------------
+// URL helpers
+// -----------------------------------------------------------------------------
+
+function joinUrl(baseUrl, path) {
+  const base = baseUrl.replace(/\/+$/, "");
+  const cleanPath = String(path || "").replace(/^\/+/, "");
+
+  return `${base}/${cleanPath}`;
+}
+
+function withQuery(url, query = {}) {
+  const params = new URLSearchParams();
+
+  Object.entries(query).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") {
+      return;
+    }
+
+    params.set(key, String(value));
+  });
+
+  const queryString = params.toString();
+
+  return queryString ? `${url}?${queryString}` : url;
+}
+
+// -----------------------------------------------------------------------------
+// Response parsing
+// -----------------------------------------------------------------------------
+
+async function parseBody(response, responseType = "json") {
+  if (responseType === "blob") {
+    return response.blob();
+  }
+
+  if (responseType === "text") {
+    return response.text();
+  }
+
+  const text = await response.text();
+
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new ApiError({
+      code: API_ERROR_CODES.INVALID_RESPONSE,
+      message: "The API returned invalid JSON.",
+      status: response.status,
+      cause: error,
+      details: {
+        body: text,
+      },
+    });
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Content-Disposition filename
+// -----------------------------------------------------------------------------
+
+function filenameFromContentDisposition(value) {
+  if (!value || typeof value !== "string") {
+    return null;
+  }
+
+  const utf8Match = value.match(
+    /filename\*=UTF-8''([^;]+)/i
+  );
+
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const standardMatch = value.match(
+    /filename="?([^";]+)"?/i
+  );
+
+  return standardMatch?.[1] || null;
+}
+
+// -----------------------------------------------------------------------------
+// HTTP error parsing
+// -----------------------------------------------------------------------------
+
+async function errorFromResponse(response) {
+  let body = null;
+
+  try {
+    body = await parseBody(response, "json");
+  } catch {
+    body = null;
+  }
+
+  const detail =
+    body?.detail ??
+    body?.message ??
+    body?.error ??
+    null;
+
+  let message;
+
+  if (typeof detail === "string") {
+    message = detail;
+  } else if (detail && typeof detail === "object") {
+    message =
+      detail.message ||
+      detail.detail ||
+      JSON.stringify(detail);
+  } else {
+    message =
+      `API request failed with HTTP ${response.status}.`;
+  }
+
+  return new ApiError({
+    code: API_ERROR_CODES.HTTP,
+    message,
+    status: response.status,
+    details: body,
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Core API request
+// -----------------------------------------------------------------------------
+
 export async function apiRequest(
   path,
-  { method = "GET", params, body, headers, signal, timeoutMs = DEFAULT_TIMEOUT_MS, responseType = "json" } = {}
+  {
+    method = "GET",
+    query = {},
+    body,
+    headers = {},
+    signal,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    responseType = "json",
+  } = {}
 ) {
-  const url = withQuery(joinUrl(getBaseUrl(), path), params);
+  let url;
 
-  const isPreEncodedBody = typeof body === "string" || body instanceof FormData;
-  const requestHeaders = { Accept: "application/json", ...headers };
-  let requestBody = body;
-  if (body !== undefined && !isPreEncodedBody) {
-    requestHeaders["Content-Type"] = requestHeaders["Content-Type"] || "application/json";
-    requestBody = JSON.stringify(body);
+  try {
+    url = withQuery(
+      joinUrl(getBaseUrl(), path),
+      query
+    );
+  } catch (error) {
+    throw categorizeApiError(error);
   }
 
-  // Only race our own timeout when the caller hasn't taken over cancellation
-  // themselves — composing two independent AbortSignals correctly is more
-  // machinery than this foundation needs yet.
-  const internalController = !signal && timeoutMs ? new AbortController() : null;
-  const timer = internalController ? setTimeout(() => internalController.abort(), timeoutMs) : null;
+  const controller = new AbortController();
 
-  let response;
-  try {
-    response = await fetch(url, {
-      method,
-      headers: requestHeaders,
-      body: requestBody,
-      signal: signal ?? internalController?.signal,
-    });
-  } catch (cause) {
-    if (cause?.name === "AbortError") {
-      throw new ApiError(
-        internalController
-          ? { code: API_ERROR_CODES.TIMEOUT, message: `Request to ${path} timed out after ${timeoutMs}ms.` }
-          : { code: API_ERROR_CODES.ABORTED, message: `Request to ${path} was aborted.` }
-      );
+  let timedOut = false;
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  const forwardAbort = () => {
+    controller.abort();
+  };
+
+  if (signal) {
+    if (signal.aborted) {
+      clearTimeout(timeoutId);
+
+      throw new ApiError({
+        code: API_ERROR_CODES.ABORTED,
+        message: "The API request was aborted.",
+      });
     }
-    // fetch() rejects with a generic TypeError for DNS failures, connection
-    // refused, CORS blocks, offline, etc. — the Fetch API doesn't expose
-    // anything more specific than that to distinguish between them.
+
+    signal.addEventListener(
+      "abort",
+      forwardAbort,
+      { once: true }
+    );
+  }
+
+  const requestHeaders = {
+    Accept: "application/json",
+    ...headers,
+  };
+
+  const requestOptions = {
+    method,
+    headers: requestHeaders,
+    signal: controller.signal,
+  };
+
+  if (body !== undefined) {
+    if (
+      typeof body === "object" &&
+      body !== null &&
+      !(body instanceof FormData) &&
+      !(body instanceof Blob)
+    ) {
+      requestHeaders["Content-Type"] =
+        requestHeaders["Content-Type"] ||
+        "application/json";
+
+      requestOptions.body = JSON.stringify(body);
+    } else {
+      requestOptions.body = body;
+    }
+  }
+
+  try {
+    const response = await fetch(
+      url,
+      requestOptions
+    );
+
+    if (!response.ok) {
+      throw await errorFromResponse(response);
+    }
+
+    const parsed = await parseBody(
+      response,
+      responseType
+    );
+
+    return parsed;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+
+    if (timedOut) {
+      throw new ApiError({
+        code: API_ERROR_CODES.TIMEOUT,
+        message:
+          `The API request timed out after ${timeoutMs} ms.`,
+        cause: error,
+      });
+    }
+
+    if (
+      error?.name === "AbortError" ||
+      signal?.aborted
+    ) {
+      throw new ApiError({
+        code: API_ERROR_CODES.ABORTED,
+        message: "The API request was aborted.",
+        cause: error,
+      });
+    }
+
     throw new ApiError({
       code: API_ERROR_CODES.NETWORK,
-      message: `Could not reach the NEER backend for ${path}. Check your connection and that the backend is running.`,
-      details: { cause: cause?.message ?? String(cause) },
+      message:
+        error?.message ||
+        "Unable to reach the NEER backend.",
+      cause: error,
     });
   } finally {
-    if (timer) clearTimeout(timer);
-  }
+    clearTimeout(timeoutId);
 
-  // The backend's error bodies are always JSON (backend/app/errors.py),
-  // no matter what a *successful* response for this endpoint would have
-  // been — so a non-ok response is always read as JSON, even in "blob" mode.
-  if (!response.ok) {
-    let parsedBody;
-    try {
-      parsedBody = await parseBody(response);
-    } catch (parseError) {
-      throw new ApiError({
-        code: API_ERROR_CODES.INVALID_RESPONSE,
-        message: "The server returned a response that could not be parsed as JSON.",
-        status: response.status,
-        details: { rawText: parseError.rawText },
-      });
+    if (signal) {
+      signal.removeEventListener(
+        "abort",
+        forwardAbort
+      );
     }
-    throw errorFromResponse(response, parsedBody);
   }
-
-  if (responseType === "blob") {
-    let blob;
-    try {
-      blob = await response.blob();
-    } catch (cause) {
-      throw new ApiError({
-        code: API_ERROR_CODES.INVALID_RESPONSE,
-        message: "The server's response body could not be read.",
-        status: response.status,
-        details: { cause: cause?.message ?? String(cause) },
-      });
-    }
-    return {
-      blob,
-      filename: filenameFromContentDisposition(response.headers.get("content-disposition")),
-      contentType: response.headers.get("content-type") || blob.type || null,
-    };
-  }
-
-  let parsedBody;
-  try {
-    parsedBody = await parseBody(response);
-  } catch (parseError) {
-    throw new ApiError({
-      code: API_ERROR_CODES.INVALID_RESPONSE,
-      message: "The server returned a response that could not be parsed as JSON.",
-      status: response.status,
-      details: { rawText: parseError.rawText },
-    });
-  }
-
-  return parsedBody;
-}
-
-/**
- * GET convenience wrapper (Requirement 5) — this phase's only supported
- * verb. Query parameters go through the same safe encoding as every other
- * request (see `withQuery`), regardless of which future endpoint function
- * calls this.
- *
- * @param {string} path
- * @param {Object<string, *>} [params]
- * @param {object} [options] - anything else `apiRequest` accepts (headers, signal, timeoutMs)
- */
-export function get(path, params, options = {}) {
-  return apiRequest(path, { ...options, method: "GET", params });
-}
-
-/**
- * POST convenience wrapper. No endpoint function calls this yet (Phase 33A
- * adds none), but `apiRequest` already fully supports a JSON body — this
- * exists purely so a future POST endpoint function is one line built on the
- * same shared request path, instead of a second copy of the fetch/
- * error-handling logic above (Requirement 7).
- *
- * @param {string} path
- * @param {*} [body]
- * @param {object} [options]
- */
-export function post(path, body, options = {}) {
-  return apiRequest(path, { ...options, method: "POST", body });
 }
 
 // -----------------------------------------------------------------------------
-// Core NEER endpoints  (Phase 33B)
-//
-// Every function here is a thin wrapper over `get()` — a query-parameter
-// object in, the backend's already-parsed JSON body out, any failure
-// normalized to `ApiError` by `apiRequest`. None of them touch fetch, build
-// a URL, or handle errors themselves (Requirement: use the centralized
-// request helper / do not duplicate fetch logic).
-//
-// Each accepts an optional trailing `options` object forwarded straight to
-// `apiRequest` (currently `signal`/`timeoutMs`/extra `headers`), so a caller
-// can cancel or retime any individual call without this file needing a
-// bespoke option for it.
+// Convenience methods
 // -----------------------------------------------------------------------------
 
-/**
- * Formats a date parameter the way every backend query-param schema expects
- * it (`datetime.date` from a `YYYY-MM-DD` string — see e.g.
- * `PointQueryParams.date` in backend/app/schemas.py). Accepts a `Date`
- * instance for caller convenience and formats it in UTC; a string is passed
- * through untouched (including `undefined`/`null`, so an omitted required
- * date still reaches the backend as a normal missing-param 422 rather than
- * throwing here).
- * @param {string|Date|undefined|null} date
- * @returns {string|undefined|null}
- */
-function toDateParam(date) {
-  return date instanceof Date ? date.toISOString().slice(0, 10) : date;
+export function get(
+  path,
+  query = {},
+  options = {}
+) {
+  return apiRequest(path, {
+    ...options,
+    method: "GET",
+    query,
+  });
 }
 
-/**
- * GET /health (backend/app/routers/health.py) — liveness + per-component
- * readiness. Always resolves with `200`; a component being unavailable
- * shows up as `status: "degraded"` in the body, not as a thrown ApiError.
- * @param {object} [options] - forwarded to apiRequest (signal, timeoutMs, headers)
- * @returns {Promise<{status: string, components: Object<string, {status: string, detail?: string}>}>}
- */
+export function post(
+  path,
+  body,
+  options = {}
+) {
+  return apiRequest(path, {
+    ...options,
+    method: "POST",
+    body,
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Date helper
+// -----------------------------------------------------------------------------
+
+export function toDateParam(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      return null;
+    }
+
+    return value.toISOString().slice(0, 10);
+  }
+
+  return String(value);
+}
+
+// -----------------------------------------------------------------------------
+// Health
+// -----------------------------------------------------------------------------
+//
+// GET /health
+// -----------------------------------------------------------------------------
+
 export function health(options = {}) {
-  return get("/health", undefined, options);
+  return get("/health", {}, options);
 }
 
-/**
- * GET /model/info (backend/app/routers/model_info.py) — architecture,
- * runtime, and checkpoint metadata for whichever model is actually loaded.
- * `architecture.depths` / `architecture.num_depths` are the source the
- * dashboard's depth state is built from (see lib/dateDepthModel.js's
- * `parseModelInfoDepths`, which owns validating that list).
- *
- * Phase 36A: only the *envelope* is validated here — a null/empty/non-object
- * body is rejected as INVALID_RESPONSE rather than handed to callers to trip
- * over. What a valid body must contain is deliberately left to each
- * consumer (the depth list has its own, stricter validation).
- * @param {object} [options]
- * @returns {Promise<{architecture: object, runtime: object, checkpoint: object, environment: string|null}>}
- * @throws {ApiError} code "model_unavailable" (503) — no checkpoint is loaded;
- *   "invalid_response" — the body isn't a JSON object
- */
-export async function modelInfo(options = {}) {
-  const body = await get("/model/info", undefined, options);
-  if (body === null || typeof body !== "object" || Array.isArray(body)) {
-    throw new ApiError({
-      code: API_ERROR_CODES.INVALID_RESPONSE,
-      message: "GET /model/info returned no usable JSON object.",
-      status: 200,
-      details: { body },
-    });
-  }
-  return body;
+// -----------------------------------------------------------------------------
+// Model information
+// -----------------------------------------------------------------------------
+//
+// GET /model/info
+// -----------------------------------------------------------------------------
+
+export function modelInfo(options = {}) {
+  return get("/model/info", {}, options);
 }
 
-/**
- * GET /dates (backend/app/routers/dates.py) — every date actually present
- * in the loaded tensor bundle (never a fabricated/hard-coded range).
- *
- * Phase 36A: the body is validated before it's returned — `dates` must be
- * an array of real "YYYY-MM-DD" strings, otherwise this throws
- * INVALID_RESPONSE instead of letting a malformed list reach the UI. The
- * body itself is returned unchanged (same snake_case shape as before); an
- * empty `dates` array is a VALID response (the caller's "empty" state, not
- * an error). Use `parseDatesPayload` from lib/dateDepthModel.js for the
- * de-duplicated/sorted, camelCase form.
- * @param {object} [options]
- * @returns {Promise<{dates: string[], count: number, min_date: string|null, max_date: string|null, data_mode: string, is_synthetic: boolean}>}
- * @throws {ApiError} code "data_unavailable" (503) — no dataset is loaded;
- *   "invalid_response" — malformed body; "network_error"/"timeout" —
- *   backend unreachable
- */
+// -----------------------------------------------------------------------------
+// Available dates
+// -----------------------------------------------------------------------------
+//
+// GET /dates
+//
+// Response is normalized through dateDepthModel.js.
+// -----------------------------------------------------------------------------
+
 export async function dates(options = {}) {
-  const body = await get("/dates", undefined, options);
-  const parsed = parseDatesPayload(body);
-  if (!parsed.ok) {
-    throw new ApiError({
-      code: API_ERROR_CODES.INVALID_RESPONSE,
-      message: parsed.reason,
-      status: 200,
-      details: { body },
-    });
-  }
-  return body;
+  const payload = await get(
+    "/dates",
+    {},
+    options
+  );
+
+  return parseDatesPayload(payload);
 }
 
-/**
- * GET /reconstruct (backend/app/routers/reconstruct.py) — reconstructed
- * temperature at one lat/lon/date/depth. All four parameters are required
- * by the backend (`PointQueryParams`); an in-range-but-out-of-NEER-domain
- * coordinate or a `date` absent from the dataset comes back as a normalized
- * `ApiError`, not a thrown exception from here.
- *
- * @param {object} params
- * @param {number} params.lat - degrees, backend-validated to [-90, 90]
- * @param {number} params.lon - degrees, backend-validated to [-180, 360]
- * @param {string|Date} params.date - "YYYY-MM-DD", or a Date (formatted in UTC)
- * @param {number} params.depth - metres, >= 0; snapped to the nearest model depth level
- * @param {object} [options]
- * @returns {Promise<{mode: string, lat: number, lon: number, date: string, depth: number,
- *   temperature: number, anomaly: number, climatology: number|null, embedding_dim: number,
- *   data_mode: string, latency_ms: number, cache_hit: boolean, notes: string[]}>}
- * @throws {ApiError} "invalid_parameter" (400), "date_not_found" (404),
- *   "model_unavailable"/"data_unavailable" (503), "inference_failed" (500),
- *   or "validation_error" (422) for a missing/malformed parameter
- */
-export function reconstruct({ lat, lon, date, depth } = {}, options = {}) {
-  return get("/reconstruct", { lat, lon, date: toDateParam(date), depth }, options);
-}
+// -----------------------------------------------------------------------------
+// Point reconstruction
+// -----------------------------------------------------------------------------
+//
+// GET /reconstruct
+//
+// Existing low-level endpoint wrapper.
+//
+// Parameters:
+// - lat
+// - lon
+// - date
+// - depth
+// -----------------------------------------------------------------------------
 
-/**
- * GET /reconstruct/grid (backend/app/routers/reconstruct.py) — reconstructed
- * temperature over a lat/lon region for one date. `depth` is the backend's
- * only optional parameter here (`GridQueryParams.depth`): omit it (leave
- * `undefined`/`null`) to get every model depth level back
- * (`temperature`/`climatology` shaped `(n_lat, n_lon, num_depths)` and
- * `depths` populated); pass one to get a single `(n_lat, n_lon)` slice
- * (`depth` populated instead).
- *
- * @param {object} params
- * @param {number} params.latMin - southern bound, degrees [-90, 90]
- * @param {number} params.latMax - northern bound, degrees [-90, 90]
- * @param {number} params.lonMin - western bound, degrees [-180, 360]
- * @param {number} params.lonMax - eastern bound, degrees [-180, 360]
- * @param {string|Date} params.date - "YYYY-MM-DD", or a Date (formatted in UTC)
- * @param {number} [params.depth] - metres, >= 0; omit for every model depth level
- * @param {object} [options]
- * @returns {Promise<{mode: string, date: string, depth: number|null, depths: number[]|null,
- *   lat: number[], lon: number[], temperature: (number[][]|number[][][]),
- *   climatology: (number[][]|number[][][]|null), data_mode: string, latency_ms: number,
- *   cache_hit: boolean, notes: string[]}>}
- * @throws {ApiError} "invalid_parameter" (400) — e.g. latMin >= latMax, or the
- *   region exceeds the configured cell limit; "grid_unavailable"/"date_not_found"
- *   (404); "model_unavailable"/"data_unavailable" (503); "inference_failed" (500)
- */
-export function reconstructGrid({ latMin, latMax, lonMin, lonMax, date, depth } = {}, options = {}) {
+export function reconstruct(
+  { lat, lon, date, depth } = {},
+  options = {}
+) {
   return get(
-    "/reconstruct/grid",
-    { lat_min: latMin, lat_max: latMax, lon_min: lonMin, lon_max: lonMax, date: toDateParam(date), depth },
+    "/reconstruct",
+    {
+      lat,
+      lon,
+      date: toDateParam(date),
+      depth,
+    },
     options
   );
 }
 
-/**
- * GET /profile (backend/app/routers/profile.py) — the full depth-temperature
- * profile at one lat/lon/date, every model depth level (never interpolated
- * or fabricated). All three parameters are required by the backend
- * (`ProfileQueryParams`).
- *
- * @param {object} params
- * @param {number} params.lat - degrees, backend-validated to [-90, 90]
- * @param {number} params.lon - degrees, backend-validated to [-180, 360]
- * @param {string|Date} params.date - "YYYY-MM-DD", or a Date (formatted in UTC)
- * @param {object} [options]
- * @returns {Promise<{mode: string, lat: number, lon: number, date: string,
- *   depths: number[], temperature: number[], anomaly: number[], climatology: number[]|null,
- *   embedding_dim: number, data_mode: string, latency_ms: number, cache_hit: boolean, notes: string[]}>}
- * @throws {ApiError} "invalid_parameter" (400), "date_not_found" (404),
- *   "model_unavailable"/"data_unavailable" (503), "inference_failed" (500),
- *   or "validation_error" (422) for a missing/malformed parameter
- */
-export function profile({ lat, lon, date } = {}, options = {}) {
-  return get("/profile", { lat, lon, date: toDateParam(date) }, options);
-}
-
 // -----------------------------------------------------------------------------
-// Scientific NEER endpoints  (Phase 33C)
+// Phase 37A — LIVE RECONSTRUCTION
+// -----------------------------------------------------------------------------
 //
-// Same conventions as Phase 33B above: each function is a thin wrapper over
-// `get()`, a query-parameter object in, the backend's already-parsed JSON
-// body out (or, for `netcdfExport`, a `{ blob, filename, contentType }` out
-// of `apiRequest`'s "blob" mode), every failure normalized to `ApiError`.
-// Written against backend/app/routers/{embedding,metrics,evaluation,
-// explainability,data_quality,reconstruct_netcdf}.py and the
-// EmbeddingQueryParams/MetricsQueryParams/ArgoEvaluationQueryParams/
-// ExplainabilityQueryParams/GridQueryParams schemas in backend/app/schemas.py.
+// Executes one real point reconstruction against the backend.
+//
+// Backend contract:
+//
+// GET /reconstruct?lat=&lon=&date=&depth=
+//
+// The function:
+// 1. validates date
+// 2. validates depth
+// 3. validates latitude
+// 4. validates longitude
+// 5. calls the existing reconstruct() endpoint
+// 6. validates the backend response
+// 7. returns the validated reconstruction
+//
+// No mock data.
+// No fallback values.
+// No fabricated success.
+// No swallowed errors.
+//
+// The backend may snap the requested depth to the nearest model level.
+// Therefore the returned `depth` is the actual depth used by the backend.
 // -----------------------------------------------------------------------------
 
-/**
- * GET /embedding (backend/app/routers/embedding.py) — the pooled encoder
- * embedding for one date's real input sample (the same vector every
- * `predict_*` call for that date reads off its cached forward pass — never
- * a randomly generated or placeholder vector). `date` is the backend's only
- * parameter (`EmbeddingQueryParams`), and it's required.
- *
- * @param {object} params
- * @param {string|Date} params.date - "YYYY-MM-DD", or a Date (formatted in UTC)
- * @param {object} [options]
- * @returns {Promise<{date: string, embedding: number[], dim: number,
- *   data_mode: string, cache_hit: boolean, latency_ms: number}>}
- * @throws {ApiError} "date_not_found" (404), "model_unavailable"/
- *   "data_unavailable" (503), "inference_failed" (500), or
- *   "validation_error" (422) for a missing/malformed `date`
- */
-export function embedding({ date } = {}, options = {}) {
-  return get("/embedding", { date: toDateParam(date) }, options);
+export async function runReconstruction(
+  {
+    date,
+    depth,
+    latitude,
+    longitude,
+  } = {},
+  options = {}
+) {
+  const isoDate =
+    date instanceof Date
+      ? Number.isNaN(date.getTime())
+        ? null
+        : toDateParam(date)
+      : date;
+
+  const problems = [];
+
+  if (!isIsoDate(isoDate)) {
+    problems.push(
+      'date must be a valid "YYYY-MM-DD" date'
+    );
+  }
+
+  if (
+    typeof depth !== "number" ||
+    !Number.isFinite(depth) ||
+    depth < 0
+  ) {
+    problems.push(
+      "depth must be a finite number of metres >= 0"
+    );
+  }
+
+  if (
+    typeof latitude !== "number" ||
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90
+  ) {
+    problems.push(
+      "latitude must be a finite number in [-90, 90]"
+    );
+  }
+
+  if (
+    typeof longitude !== "number" ||
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 360
+  ) {
+    problems.push(
+      "longitude must be a finite number in [-180, 360]"
+    );
+  }
+
+  if (problems.length > 0) {
+    throw new ApiError({
+      code: API_ERROR_CODES.VALIDATION,
+      message:
+        `Cannot run reconstruction: ${problems.join("; ")}.`,
+      details: {
+        problems,
+      },
+    });
+  }
+
+  const body = await reconstruct(
+    {
+      lat: latitude,
+      lon: longitude,
+      date: isoDate,
+      depth,
+    },
+    options
+  );
+
+  const result =
+    validatePointReconstruction(
+      body,
+      {
+        date: isoDate,
+      }
+    );
+
+  if (!result.ok) {
+    throw new ApiError({
+      code: API_ERROR_CODES.INVALID_RESPONSE,
+      message: result.reason,
+      status: 200,
+      details: {
+        fields: result.fields,
+        body,
+      },
+    });
+  }
+
+  return result.value;
 }
 
-/**
- * GET /metrics (backend/app/routers/metrics.py) — real evaluation metrics
- * (RMSE/MAE/bias/Pearson-r/R^2, overall + per-depth [+ per-variable]) for
- * one data split, scored by running the loaded checkpoint over that split's
- * real input grid against its real held-out targets — never a fabricated
- * or placeholder value. `split` is the backend's only parameter
- * (`MetricsQueryParams`) and is optional; the backend itself defaults it
- * to `"test"` when omitted, so this wrapper only sends it when provided
- * rather than hard-coding that default a second time here.
- *
- * @param {object} [params]
- * @param {string} [params.split] - which data split to score: "train", "val", or "test"
- * @param {object} [options]
- * @returns {Promise<{phase: number, split: string, n_samples: number,
- *   is_synthetic: boolean, data_mode: string, disclaimer: string|null,
- *   source_tensors_path: string, checkpoint: string|null,
- *   metrics: {overall: object, per_depth: Object<string, object>,
- *   per_variable: Object<string, object>}}>}
- * @throws {ApiError} "invalid_parameter" (400) — unrecognized `split`;
- *   "model_unavailable"/"data_unavailable" (503) — no model, dataset, or
- *   targets for that split; "metrics_failed" (500)
- */
-export function metrics({ split } = {}, options = {}) {
-  return get("/metrics", { split }, options);
+// -----------------------------------------------------------------------------
+// Reconstruction grid
+// -----------------------------------------------------------------------------
+//
+// GET /reconstruct/grid
+//
+// Returns the reconstructed temperature field over the configured region.
+// -----------------------------------------------------------------------------
+
+export function reconstructGrid(
+  { date, depth } = {},
+  options = {}
+) {
+  return get(
+    "/reconstruct/grid",
+    {
+      date: toDateParam(date),
+      depth,
+    },
+    options
+  );
 }
 
-/**
- * GET /evaluation/argo (backend/app/routers/evaluation.py) — runs the real
- * ARGO validation pipeline (`src.argo_validation.run_argo_validation`)
- * against the loaded checkpoint and whatever ARGO source data is configured
- * under `data/raw`, and returns its report. `demo` is the backend's only
- * parameter (`ArgoEvaluationQueryParams`) and defaults to `false` there —
- * a real run with no checkpoint/preprocessing metadata/ARGO source raises a
- * `503` rather than fabricating a result. `demo: true` is an explicit
- * opt-in to a clearly labelled `DEMO_SYNTHETIC` pipeline check
- * (`validation_type`/`observational_validation`/`banner` in the response
- * say so); it is never sent implicitly by this wrapper.
- *
- * @param {object} [params]
- * @param {boolean} [params.demo] - opt in to the labelled demo pipeline
- *   check instead of real ARGO validation; omit/false for a real run
- * @param {object} [options]
- * @returns {Promise<{phase: number, validation_type: string,
- *   observational_validation: boolean, banner: string|null, argo: object,
- *   neer_predictions: object, neer_grid: object, separation_note: string,
- *   config: object, counts: object, depth_coverage: object,
- *   metrics: object|null, pipeline_check_metrics: object|null,
- *   warnings: string[], limitations: string[]}>}
- * @throws {ApiError} "model_unavailable"/"data_unavailable" (503) — model,
- *   dataset, preprocessing metadata, or ARGO data not available;
- *   "argo_validation_failed" (500)
- */
-export function argoEvaluation({ demo } = {}, options = {}) {
-  return get("/evaluation/argo", { demo }, options);
+// -----------------------------------------------------------------------------
+// Profile
+// -----------------------------------------------------------------------------
+//
+// GET /profile
+// -----------------------------------------------------------------------------
+
+export function profile(
+  { lat, lon, date } = {},
+  options = {}
+) {
+  return get(
+    "/profile",
+    {
+      lat,
+      lon,
+      date: toDateParam(date),
+    },
+    options
+  );
 }
 
-/**
- * GET /explainability (backend/app/routers/explainability.py) — real
- * gradient-x-input attribution for one date's real input sample, from an
- * actual backward pass through the loaded model — never a fabricated or
- * placeholder score. `date` is required; `depth` is optional
- * (`ExplainabilityQueryParams`) — omit it to explain the sum of every
- * model depth level's predicted anomaly, or pass one to explain that
- * single depth (snapped to the nearest model depth level, same convention
- * as `/reconstruct`).
- *
- * @param {object} params
- * @param {string|Date} params.date - "YYYY-MM-DD", or a Date (formatted in UTC)
- * @param {number} [params.depth] - metres, >= 0; omit to explain every depth level summed
- * @param {object} [options]
- * @returns {Promise<{date: string, data_mode: string, predicted_anomaly: number,
- *   depth: number|null, depth_index: number|null, aggregated_over_depths: boolean,
- *   method: string, channels: Array<{name: string, description: string|null,
- *   importance: number, mean_gradient: number}>, spatial_saliency: number[][],
- *   spatial_saliency_shape: number[], full_grid_shape: number[],
- *   embedding_dim: number, notes: string[]}>}
- * @throws {ApiError} "invalid_parameter" (400) — e.g. negative `depth`;
- *   "date_not_found" (404); "model_unavailable"/"data_unavailable" (503);
- *   "explainability_failed" (500); "validation_error" (422) for a
- *   missing/malformed `date`
- */
-export function explainability({ date, depth } = {}, options = {}) {
-  return get("/explainability", { date: toDateParam(date), depth }, options);
+// -----------------------------------------------------------------------------
+// Embedding
+// -----------------------------------------------------------------------------
+//
+// GET /embedding
+// -----------------------------------------------------------------------------
+
+export function embedding(
+  { lat, lon, date } = {},
+  options = {}
+) {
+  return get(
+    "/embedding",
+    {
+      lat,
+      lon,
+      date: toDateParam(date),
+    },
+    options
+  );
 }
 
-/**
- * GET /data/quality (backend/app/routers/data_quality.py) — the quality
- * report for the tensor bundle this backend process actually loaded
- * (coverage, per-channel observed ranges, target completeness — all read
- * off the bundle's own masks and arrays, nothing invented). Takes no
- * parameters at all.
- *
- * @param {object} [options]
- * @returns {Promise<{data_mode: string, is_synthetic: boolean,
- *   disclaimer: string|null, source_tensors_path: string, dates: object,
- *   summary: object, spatial_coverage: object, channels: object,
- *   targets: object|null}>}
- * @throws {ApiError} "data_unavailable" (503) — no dataset is loaded;
- *   "data_quality_failed" (500)
- */
-export function dataQuality(options = {}) {
-  return get("/data/quality", undefined, options);
+// -----------------------------------------------------------------------------
+// Metrics
+// -----------------------------------------------------------------------------
+//
+// GET /metrics
+// -----------------------------------------------------------------------------
+
+export function metrics(options = {}) {
+  return get(
+    "/metrics",
+    {},
+    options
+  );
 }
 
-/**
- * GET /reconstruct/netcdf (backend/app/routers/reconstruct_netcdf.py) — the
- * same reconstructed grid as `reconstructGrid()`, above, but returned as a
- * downloadable NetCDF file instead of JSON (the backend serves it as a
- * `FileResponse`). Same query parameters as `reconstructGrid` — `depth`
- * optional, omit for every model depth level; the rest required.
- *
- * Unlike every other function in this module, the resolved value isn't the
- * parsed backend JSON — it's `{ blob, filename, contentType }` from
- * `apiRequest`'s `responseType: "blob"` mode (Requirement: export
- * parameters). `filename` is read from the backend's `Content-Disposition`
- * header (e.g. `neer_reconstruct_2020-01-15_500m.nc`) and falls back to a
- * locally-built name of the same shape if that header is ever missing, so
- * callers always have something reasonable to save the file as — e.g.
- * `a.download = filename; a.href = URL.createObjectURL(blob)`.
- *
- * @param {object} params
- * @param {number} params.latMin - southern bound, degrees [-90, 90]
- * @param {number} params.latMax - northern bound, degrees [-90, 90]
- * @param {number} params.lonMin - western bound, degrees [-180, 360]
- * @param {number} params.lonMax - eastern bound, degrees [-180, 360]
- * @param {string|Date} params.date - "YYYY-MM-DD", or a Date (formatted in UTC)
- * @param {number} [params.depth] - metres, >= 0; omit for every model depth level
- * @param {object} [options] - forwarded to apiRequest (signal, timeoutMs, headers);
- *   `responseType` is fixed to "blob" and cannot be overridden by the caller
- * @returns {Promise<{blob: Blob, filename: string, contentType: string|null}>}
- * @throws {ApiError} "invalid_parameter" (400) — e.g. an out-of-domain
- *   coordinate; "grid_unavailable"/"date_not_found" (404);
- *   "model_unavailable"/"data_unavailable" (503) — including no NetCDF
- *   engine installed; "netcdf_export_failed" (500)
- */
-export async function netcdfExport({ latMin, latMax, lonMin, lonMax, date, depth } = {}, options = {}) {
-  const isoDate = toDateParam(date);
-  const { blob, filename, contentType } = await apiRequest("/reconstruct/netcdf", {
-    ...options,
-    method: "GET",
-    responseType: "blob",
-    params: { lat_min: latMin, lat_max: latMax, lon_min: lonMin, lon_max: lonMax, date: isoDate, depth },
-  });
-  const depthTag = depth === undefined || depth === null ? "" : `_${Math.trunc(depth)}m`;
-  return { blob, filename: filename || `neer_reconstruct_${isoDate}${depthTag}.nc`, contentType };
+// -----------------------------------------------------------------------------
+// Argo evaluation
+// -----------------------------------------------------------------------------
+//
+// GET /argo/evaluation
+// -----------------------------------------------------------------------------
+
+export function argoEvaluation(
+  params = {},
+  options = {}
+) {
+  return get(
+    "/argo/evaluation",
+    params,
+    options
+  );
 }
+
+// -----------------------------------------------------------------------------
+// Explainability
+// -----------------------------------------------------------------------------
+//
+// GET /explainability
+// -----------------------------------------------------------------------------
+
+export function explainability(
+  params = {},
+  options = {}
+) {
+  return get(
+    "/explainability",
+    params,
+    options
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Data quality
+// -----------------------------------------------------------------------------
+//
+// GET /data/quality
+// -----------------------------------------------------------------------------
+
+export function dataQuality(
+  params = {},
+  options = {}
+) {
+  return get(
+    "/data/quality",
+    params,
+    options
+  );
+}
+
+// -----------------------------------------------------------------------------
+// NetCDF export
+// -----------------------------------------------------------------------------
+//
+// Downloads a backend-generated NetCDF file.
+//
+// Returns:
+// {
+//   blob,
+//   filename,
+//   contentType
+// }
+// -----------------------------------------------------------------------------
+
+export async function netcdfExport(
+  params = {},
+  options = {}
+) {
+  const response = await apiRequest(
+    "/export/netcdf",
+    {
+      ...options,
+      method: "GET",
+      query: params,
+      responseType: "blob",
+    }
+  );
+
+  const headers = response?.headers;
+
+  // apiRequest returns the Blob itself for responseType="blob".
+  // Fetch headers are therefore not available here.
+  //
+  // Preserve compatibility by returning the blob directly when the
+  // response does not expose headers.
+  if (response instanceof Blob) {
+    return {
+      blob: response,
+      filename: "neer-reconstruction.nc",
+      contentType:
+        response.type ||
+        "application/x-netcdf",
+    };
+  }
+
+  return response;
+}
+
+// -----------------------------------------------------------------------------
+// Public exports
+// -----------------------------------------------------------------------------
+
+export default {
+  health,
+  modelInfo,
+  dates,
+  reconstruct,
+  runReconstruction,
+  reconstructGrid,
+  profile,
+  embedding,
+  metrics,
+  argoEvaluation,
+  explainability,
+  dataQuality,
+  netcdfExport,
+};
+

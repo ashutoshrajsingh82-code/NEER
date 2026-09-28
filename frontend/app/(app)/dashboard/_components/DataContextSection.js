@@ -25,8 +25,8 @@ import { formatDepthMetres } from "@/lib/dateDepthControls";
 import DateControls from "./DateControls";
 import DepthControls from "./DepthControls";
 import { usePointInspection } from "../_context/PointInspectionContext";
-import { useDateDepthContext } from "../../_context/DateDepthContext";
-import { useMapFieldStatus } from "../_context/MapFieldStatusContext";
+import { useDateDepthContext } from "../_context/DateDepthContext";
+import { useMapFieldStatus } from "./MapFieldStatusContext";
 
 const MODE_CONFIG = {
   reconstructed: { label: "Reconstructed", variant: "accent" },

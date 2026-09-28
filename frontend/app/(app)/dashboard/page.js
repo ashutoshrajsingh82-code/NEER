@@ -46,7 +46,7 @@ import MissionHeader from "./_components/MissionHeader";
 import SystemStatusPanel from "./_components/SystemStatusPanel";
 import DataContextSection from "./_components/DataContextSection";
 import ModelContextPanel from "./_components/ModelContextPanel";
-import { MapFieldStatusProvider } from "./_context/MapFieldStatusContext";
+import { MapFieldStatusProvider } from "./_components/MapFieldStatusContext";
 
 export const metadata = { title: "Dashboard — NEER" };
 
