@@ -92,8 +92,12 @@ function subtractGrids(a, b) {
  *   tooLargeForCellLimit: boolean,
  * }}
  */
+const UNKNOWN_VARIABLE = Object.freeze({ supported: false, reason: "Unknown variable" });
+
 export function useOceanMapLayer({ variable, date, depth, bounds }) {
-  const support = LAYER_SUPPORT[variable] ?? { supported: false, reason: "Unknown variable" };
+  const support = LAYER_SUPPORT[variable] ?? UNKNOWN_VARIABLE;
+  const isSupported = support.supported;
+  const fieldName = support.field;
   const { latMin, latMax, lonMin, lonMax } = bounds;
 
   const estimatedCells = useMemo(() => {
@@ -103,7 +107,8 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
   }, [latMin, latMax, lonMin, lonMax]);
   const tooLargeForCellLimit = estimatedCells > MAX_GRID_POINTS;
 
-  const canFetch = support.supported && !tooLargeForCellLimit && Boolean(date);
+  const hasValidBounds = latMin < latMax && lonMin < lonMax;
+  const canFetch = isSupported && hasValidBounds && !tooLargeForCellLimit && Boolean(date);
 
   const { data, error, status, isLoading, isError, run, reset } = useApiRequest(reconstructGrid);
 
@@ -111,7 +116,7 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
   // /reconstruct/grid response) rather than the variable itself, so
   // switching between those two tabs never re-fetches — only a change that
   // actually needs a different response does.
-  const family = support.supported ? "temperature" : null;
+  const family = isSupported ? "temperature" : null;
   const requestKey = canFetch
     ? [family, String(date), depth, latMin.toFixed(2), latMax.toFixed(2), lonMin.toFixed(2), lonMax.toFixed(2)].join(
         "|"
@@ -126,22 +131,29 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
       return;
     }
     if (lastKeyRef.current === requestKey) return;
-    lastKeyRef.current = requestKey;
-    run({ latMin, latMax, lonMin, lonMax, date, depth }).catch(() => {
-      // Swallowed here on purpose — `error`/`isError` below already
-      // capture the failure for the caller to render.
-    });
+
+    const timer = setTimeout(() => {
+      lastKeyRef.current = requestKey;
+      run({ latMin, latMax, lonMin, lonMax, date, depth }).catch(() => {
+        // Swallowed here on purpose — `error`/`isError` below already
+        // capture the failure for the caller to render.
+      });
+    }, 200);
+
+    return () => {
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canFetch, requestKey]);
 
   const values = useMemo(() => {
-    if (!data || !support.supported) return null;
-    if (support.field === "temperature") return data.temperature;
-    if (support.field === "anomaly") {
+    if (!data || !isSupported) return null;
+    if (fieldName === "temperature") return data.temperature;
+    if (fieldName === "anomaly") {
       return data.climatology ? subtractGrids(data.temperature, data.climatology) : null;
     }
     return null;
-  }, [data, support]);
+  }, [data, isSupported, fieldName]);
 
   // Phase 35C-B: the hover tooltip (OceanMap.js) shows temperature *and*
   // anomaly together, regardless of which single variable tab is active —
@@ -151,14 +163,14 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
   // `null` here exactly when it would have above (no `climatology` for
   // this date), rather than silently falling back to something else.
   const temperatureValues = useMemo(() => {
-    if (!data || !support.supported) return null;
+    if (!data || !isSupported) return null;
     return data.temperature ?? null;
-  }, [data, support]);
+  }, [data, isSupported]);
 
   const anomalyValues = useMemo(() => {
-    if (!data || !support.supported) return null;
+    if (!data || !isSupported) return null;
     return data.climatology ? subtractGrids(data.temperature, data.climatology) : null;
-  }, [data, support]);
+  }, [data, isSupported]);
 
   const grid = data ? { lat: data.lat, lon: data.lon, depth: data.depth, depths: data.depths } : null;
 

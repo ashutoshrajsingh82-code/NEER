@@ -11,12 +11,23 @@
 // Node already provides (fetch, URLSearchParams, AbortController) and has
 // no DOM dependency, so there's no reason to pay jsdom's cost for these tests.
 // -----------------------------------------------------------------------------
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  esbuild: {
+    loader: "jsx",
+    include: /.[jt]sx?$/,
+    exclude: [],
+  },
   test: {
     environment: "node",
-    include: ["lib/**/*.test.js"],
+    include: ["lib/**/*.test.js", "components/**/*.test.js"],
     restoreMocks: true,
+  },
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./", import.meta.url)),
+    },
   },
 });

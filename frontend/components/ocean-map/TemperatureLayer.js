@@ -27,7 +27,7 @@
 // rather than colored using a placeholder or interpolated value.
 // -----------------------------------------------------------------------------
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { PX_PER_DEGREE, project } from "./landmask";
 
 /**
@@ -99,3 +99,5 @@ export default function TemperatureLayer({ grid, values, colorMapper, visible = 
     </g>
   );
 }
+
+export default memo(TemperatureLayer);

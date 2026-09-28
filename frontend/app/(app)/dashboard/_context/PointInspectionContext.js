@@ -52,20 +52,17 @@
 // workflows will have its own notion of "what's selected".
 // -----------------------------------------------------------------------------
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { reconstruct } from "@/lib/api";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { dates, reconstruct } from "@/lib/api";
 import { useApiRequest } from "@/lib/useApiRequest";
 import { POINT_STATUS, classifyPointLocation, isQueryablePoint } from "@/lib/pointClassification";
 import { isOnLand } from "@/components/ocean-map/landmask";
 
 const PointInspectionContext = createContext(null);
 
-// Same placeholder "current view" values page.js (Phase 34C) and
-// DataContextPanel (Phase 34B) each hardcoded independently before this
-// context centralized them (Phase 34D for the constants, Phase 34E for
-// actually being able to change them).
+// Default operational slice aligned with the NEER processed dataset.
 const DEFAULT_DATA_MODE = "reconstructed";
-const DEFAULT_DATE = "2024-03-18";
+const DEFAULT_DATE = "2020-01-01";
 const DEFAULT_DEPTH = 0;
 
 /**
@@ -186,6 +183,25 @@ export function PointInspectionProvider({
     },
     [selectedPoint, pointStatus, date, fetchPoint, resetReconstruct]
   );
+
+  // Synchronize operational date with backend available dates when connected
+  useEffect(() => {
+    let active = true;
+    dates()
+      .then((res) => {
+        if (!active || !res?.dates?.length) return;
+        const targetDate = res.max_date || res.dates[res.dates.length - 1];
+        if (targetDate && (!res.dates.includes(String(date)) || date === DEFAULT_DATE)) {
+          setDate(targetDate);
+        }
+      })
+      .catch(() => {
+        // Backend offline or dates endpoint unavailable; keep current default date
+      });
+    return () => {
+      active = false;
+    };
+  }, [date, setDate]);
 
   const pointInspection = useMemo(
     () => ({

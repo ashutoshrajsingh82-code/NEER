@@ -3,36 +3,31 @@
 // -----------------------------------------------------------------------------
 // NEER OceanMap — MapControls  (Phase 35D1)
 //
-// The map's user-facing control surface: layer-visibility toggles plus a
-// reset/fit action, grouped behind one compact trigger so the map surface
-// itself stays uncluttered (the spec's explicit constraint) rather than
-// scattering a row of always-visible switches across it.
+// The user-facing control surface for the NEER scientific ocean map:
+// 1. Temperature layer visibility
+// 2. Temperature anomaly layer visibility
+// 3. Grid overlay visibility (0.25° × 0.25° scientific grid)
+// 4. Reset/fit map to the NEER domain (45°E–105°E, 5°N–30°N)
+//
+// Grouped behind one compact trigger so the map surface itself stays uncluttered
+// while providing clear active/inactive states, hover states, keyboard focus
+// rings, accessible labels, Lucide React icons, and tooltips.
 //
 // Self-contained: owns its own open/close state, outside-click dismissal,
-// and Escape-to-close, so any caller can drop it in with just a `layers`
-// config and an `onReset` handler — no popover plumbing duplicated at the
-// call site (OceanMap.js previously hand-rolled this itself).
-//
-// `layers` groups into two sections purely for legibility:
-//   - the scientific layers this phase's spec asks for (temperature field,
-//     anomaly field, the 0.25° scientific grid) — passed as `layers`
-//   - the pre-existing base-map chrome toggles (graticule, coastline,
-//     domain boundary) from earlier phases — passed as `baseLayers`, kept
-//     available rather than removed, but visually secondary
-//
-// Each row is a LayerToggle in "row" layout; disabled rows (e.g. the
-// temperature toggle while the anomaly tab is active) still render with a
-// tooltip explaining why, rather than disappearing — the underlying data
-// model draws one backend-driven field at a time (whichever variable tab is
-// active), so a toggle for a field that isn't the active tab has nothing to
-// show or hide yet; this is stated honestly instead of faking independent
-// dual-layer visibility the backend doesn't support.
+// and Escape-to-close. Supports both explicit convenience props
+// (temperatureVisible, anomalyVisible, gridVisible, onReset) AND a custom
+// `layers` list for extensible layer setups.
 // -----------------------------------------------------------------------------
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Layers, RotateCcw } from "lucide-react";
-import { Tooltip } from "@/components/ui";
+import {
+  Layers,
+  LayoutGrid,
+  RotateCcw,
+  Thermometer,
+  TrendingUp,
+} from "lucide-react";
 import { cn } from "@/lib/cn";
 import { scaleIn } from "@/lib/motion";
 import LayerToggle from "./LayerToggle";
@@ -51,21 +46,74 @@ import LayerToggle from "./LayerToggle";
 
 /**
  * @param {object} props
- * @param {MapControlLayer[]} props.layers - primary scientific-layer toggles
- * @param {MapControlLayer[]} [props.baseLayers] - secondary base-map toggles
- * @param {() => void} props.onReset
- * @param {string} [props.resetLabel="Reset / fit to domain"]
+ * @param {boolean} [props.temperatureVisible] - visibility of temperature field
+ * @param {(next: boolean) => void} [props.onToggleTemperature]
+ * @param {boolean} [props.anomalyVisible] - visibility of temperature anomaly field
+ * @param {(next: boolean) => void} [props.onToggleAnomaly]
+ * @param {boolean} [props.gridVisible] - visibility of 0.25° scientific grid
+ * @param {(next: boolean) => void} [props.onToggleGrid]
+ * @param {MapControlLayer[]} [props.layers] - custom primary scientific-layer toggles
+ * @param {MapControlLayer[]} [props.baseLayers] - secondary base-map chrome toggles
+ * @param {() => void} [props.onReset] - callback to reset view / fit to NEER domain
+ * @param {string} [props.resetLabel="Reset / fit to NEER domain"]
  * @param {string} [props.className]
  */
 export default function MapControls({
-  layers = [],
+  temperatureVisible,
+  onToggleTemperature,
+  anomalyVisible,
+  onToggleAnomaly,
+  gridVisible,
+  onToggleGrid,
+  layers,
   baseLayers = [],
   onReset,
-  resetLabel = "Reset / fit to domain",
+  resetLabel = "Reset / fit to NEER domain",
   className,
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
+  const menuId = useId();
+
+  // If `layers` is not passed, build the standard scientific layers from individual props
+  const primaryLayers = useMemo(() => {
+    if (Array.isArray(layers)) return layers;
+
+    return [
+      {
+        key: "temperature-field",
+        icon: Thermometer,
+        label: "Temperature layer",
+        description: "Sea-surface temperature field",
+        active: !!temperatureVisible,
+        onToggle: onToggleTemperature,
+      },
+      {
+        key: "anomaly-field",
+        icon: TrendingUp,
+        label: "Temperature anomaly layer",
+        description: "Temperature anomaly relative to climatology",
+        active: !!anomalyVisible,
+        onToggle: onToggleAnomaly,
+      },
+      {
+        key: "scientific-grid",
+        icon: LayoutGrid,
+        label: "0.25° scientific grid",
+        description: "NEER native 0.25° × 0.25° grid overlay",
+        active: !!gridVisible,
+        onToggle: onToggleGrid,
+      },
+    ];
+  }, [
+    layers,
+    temperatureVisible,
+    onToggleTemperature,
+    anomalyVisible,
+    onToggleAnomaly,
+    gridVisible,
+    onToggleGrid,
+  ]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -85,20 +133,21 @@ export default function MapControls({
 
   return (
     <div ref={rootRef} className={cn("relative inline-flex", className)}>
-      <Tooltip content="Map layer controls">
-        <span className="inline-flex">
-          <LayerToggle
-            icon={Layers}
-            label="Map layer controls"
-            active={open}
-            onToggle={() => setOpen((prev) => !prev)}
-          />
-        </span>
-      </Tooltip>
+      <LayerToggle
+        icon={Layers}
+        label="Map layer controls"
+        description="Map layer & grid visibility controls"
+        active={open}
+        aria-expanded={open}
+        aria-controls={menuId}
+        aria-haspopup="menu"
+        onToggle={() => setOpen((prev) => !prev)}
+      />
 
       <AnimatePresence>
         {open && (
           <motion.div
+            id={menuId}
             initial="hidden"
             animate="visible"
             exit="exit"
@@ -106,16 +155,16 @@ export default function MapControls({
             role="menu"
             aria-label="Map layer controls"
             className={cn(
-              "absolute left-0 top-full z-raised mt-2 flex w-60 flex-col gap-2 rounded-md border border-border-strong",
-              "bg-surface-overlay p-2.5 shadow-raised sm:w-64"
+              "absolute left-0 top-full z-raised mt-2 flex w-60 sm:w-64 max-w-[calc(100vw-2rem)] flex-col gap-2 rounded-md border border-border-strong",
+              "bg-surface-overlay/95 backdrop-blur-md p-2.5 shadow-raised"
             )}
           >
             <div>
-              <p className="px-1.5 pb-1 text-caption uppercase tracking-widest text-text-muted">
+              <p className="px-1.5 pb-1 text-caption font-semibold uppercase tracking-widest text-text-muted">
                 Scientific layers
               </p>
               <div className="flex flex-col gap-0.5">
-                {layers.map((layer) => (
+                {primaryLayers.map((layer) => (
                   <LayerToggle
                     key={layer.key}
                     layout="row"
@@ -133,7 +182,9 @@ export default function MapControls({
 
             {baseLayers.length > 0 && (
               <div className="border-t border-border-subtle pt-1.5">
-                <p className="px-1.5 pb-1 text-caption uppercase tracking-widest text-text-muted">Base map</p>
+                <p className="px-1.5 pb-1 text-caption font-semibold uppercase tracking-widest text-text-muted">
+                  Base map
+                </p>
                 <div className="flex flex-col gap-0.5">
                   {baseLayers.map((layer) => (
                     <LayerToggle
@@ -152,24 +203,29 @@ export default function MapControls({
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={() => {
-                onReset?.();
-                setOpen(false);
-              }}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-sm border-t border-border-subtle px-1.5 pt-2 text-small",
-                "text-text-secondary neer-transition hover:text-accent-300",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:ring-offset-1 focus-visible:ring-offset-surface-overlay"
-              )}
-            >
-              <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
-              {resetLabel}
-            </button>
+            {onReset && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onReset();
+                  setOpen(false);
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-sm border-t border-border-subtle px-1.5 pt-2 pb-1 text-small",
+                  "text-text-secondary neer-transition hover:bg-surface-raised hover:text-accent-300",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:ring-offset-1 focus-visible:ring-offset-surface-overlay"
+                )}
+              >
+                <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-text-muted" />
+                <span className="truncate">{resetLabel}</span>
+              </button>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
     </div>
   );
 }
+
+export default memo(MapControls);

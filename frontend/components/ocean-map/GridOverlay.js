@@ -29,7 +29,7 @@
 // reference, not a competing visual layer.
 // -----------------------------------------------------------------------------
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { OCEAN_DOMAIN, clamp } from "@/lib/oceanDomain";
 import { PX_PER_DEGREE, project } from "./landmask";
 
@@ -126,3 +126,5 @@ export default function GridOverlay({ bounds, scale, visible = true }) {
     </g>
   );
 }
+
+export default memo(GridOverlay);

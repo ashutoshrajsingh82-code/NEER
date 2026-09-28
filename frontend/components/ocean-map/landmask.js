@@ -121,7 +121,12 @@ export const LANDMASSES = [
       [93.5, 13.5],
     ],
   },
-];
+].map((mass) =>
+  Object.freeze({
+    ...mass,
+    svgPoints: toSvgPoints(mass.points),
+  })
+);
 
 /**
  * Point-in-polygon test (ray casting) against a [lon, lat] ring.

@@ -72,6 +72,7 @@ import {
   Navigation,
   Thermometer,
   TrendingUp,
+  RotateCcw,
   Waves,
   Wind,
   ZoomIn,
@@ -93,6 +94,7 @@ import {
   formatDepth,
   formatLat,
   formatLon,
+  isWithinDomain,
   round2,
   snapToGrid,
 } from "@/lib/oceanDomain";
@@ -356,7 +358,12 @@ export default function OceanMap({
     const worldX = (raw.x - transform.x) / transform.scale;
     const worldY = (raw.y - transform.y) / transform.scale;
     const { lat, lon } = unproject(worldX, worldY);
-    selectPoint(snapToGrid(lat, lon));
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    if (isWithinDomain(lat, lon)) {
+      selectPoint(snapToGrid(lat, lon));
+    } else {
+      selectPoint({ lat: round2(lat), lon: round2(lon) });
+    }
   }
 
   function handleDoubleClick(event) {
@@ -376,6 +383,44 @@ export default function OceanMap({
     } else if (event.key === "0") {
       event.preventDefault();
       resetView();
+    } else if (event.key === "Escape") {
+      if (activeSelected) {
+        event.preventDefault();
+        selectPoint(null);
+      }
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setTransform((prev) => {
+        const { x, y } = clampPan(prev.scale, prev.x, prev.y + 40);
+        return { ...prev, x, y };
+      });
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setTransform((prev) => {
+        const { x, y } = clampPan(prev.scale, prev.x, prev.y - 40);
+        return { ...prev, x, y };
+      });
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setTransform((prev) => {
+        const { x, y } = clampPan(prev.scale, prev.x + 40, prev.y);
+        return { ...prev, x, y };
+      });
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setTransform((prev) => {
+        const { x, y } = clampPan(prev.scale, prev.x - 40, prev.y);
+        return { ...prev, x, y };
+      });
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (hover && Number.isFinite(hover.lat) && Number.isFinite(hover.lon)) {
+        if (isWithinDomain(hover.lat, hover.lon)) {
+          selectPoint(snapToGrid(hover.lat, hover.lon));
+        } else {
+          selectPoint({ lat: round2(hover.lat), lon: round2(hover.lon) });
+        }
+      }
     }
   }
 
@@ -413,6 +458,71 @@ export default function OceanMap({
     for (let lon = OCEAN_DOMAIN.lonMin; lon <= OCEAN_DOMAIN.lonMax; lon += 5) lines.push(lon);
     return lines;
   }, []);
+
+  const graticuleLines = useMemo(() => {
+    if (!layerVisibility.graticule) return null;
+    return (
+      <>
+        {latLines.map((lat) => {
+          const [, y] = project([OCEAN_DOMAIN.lonMin, lat]);
+          return (
+            <line
+              key={`lat-${lat}`}
+              x1={0}
+              y1={y}
+              x2={VIEW_BOX.width}
+              y2={y}
+              stroke="rgba(148,197,224,0.14)"
+              strokeWidth={0.5 / transform.scale}
+            />
+          );
+        })}
+        {lonLines.map((lon) => {
+          const [x] = project([lon, OCEAN_DOMAIN.latMax]);
+          return (
+            <line
+              key={`lon-${lon}`}
+              x1={x}
+              y1={0}
+              x2={x}
+              y2={VIEW_BOX.height}
+              stroke="rgba(148,197,224,0.14)"
+              strokeWidth={0.5 / transform.scale}
+            />
+          );
+        })}
+      </>
+    );
+  }, [layerVisibility.graticule, latLines, lonLines, transform.scale]);
+
+  const coastlineElements = useMemo(() => {
+    if (!layerVisibility.coastline) return null;
+    return LANDMASSES.map((mass) => (
+      <polygon
+        key={mass.id}
+        points={mass.svgPoints ?? mass.points.map((p) => project(p).join(",")).join(" ")}
+        fill="#132133"
+        stroke="rgba(148,197,224,0.3)"
+        strokeWidth={0.75 / transform.scale}
+      />
+    ));
+  }, [layerVisibility.coastline, transform.scale]);
+
+  const domainBoundaryElement = useMemo(() => {
+    if (!layerVisibility.domainBoundary) return null;
+    return (
+      <rect
+        x={0}
+        y={0}
+        width={VIEW_BOX.width}
+        height={VIEW_BOX.height}
+        fill="none"
+        stroke="rgba(45,212,191,0.55)"
+        strokeWidth={1.5 / transform.scale}
+        strokeDasharray={`${6 / transform.scale} ${5 / transform.scale}`}
+      />
+    );
+  }, [layerVisibility.domainBoundary, transform.scale]);
 
   // Current visible viewport, in lon/lat — same inverse-projection
   // handlePointerMove already uses per-pixel, applied to the surface's two
@@ -495,39 +605,46 @@ export default function OceanMap({
   const hoverAnomaly =
     hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(layer.grid, layer.anomalyValues, hover) : null;
 
-  // MapControls' primary, spec-required toggles. Both the temperature and
-  // anomaly rows share the same `layerVisibility.temperatureField` flag —
-  // there is exactly one backend-driven field on screen at a time, whichever
-  // variable tab is active (see useOceanMapLayer.js) — so the row for the
-  // *inactive* one of the pair is disabled with an explanatory tooltip
-  // rather than pretending it independently controls a second, simultaneous
-  // field the data model doesn't have.
+  // MapControls' primary, spec-required toggles:
+  // 1. Temperature layer visibility (turns SST on/off, or switches to SST)
+  // 2. Temperature anomaly layer visibility (turns anomaly on/off, or switches to anomaly)
+  // 3. Grid overlay visibility (0.25° scientific grid)
   const mapControlLayers = [
     {
       key: "temperature-field",
       icon: Thermometer,
       label: "Temperature layer",
       description: "Sea-surface temperature field",
-      active: layerVisibility.temperatureField,
-      disabled: activeVariable !== "sst",
-      disabledReason: 'Switch to the "Sea Surface Temp." tab to control this layer',
-      onToggle: () => toggleLayer("temperatureField"),
+      active: layerVisibility.temperatureField && activeVariable === "sst",
+      onToggle: () => {
+        if (layerVisibility.temperatureField && activeVariable === "sst") {
+          toggleLayer("temperatureField");
+        } else {
+          changeVariable("sst");
+          setLayerVisibility((prev) => ({ ...prev, temperatureField: true }));
+        }
+      },
     },
     {
       key: "anomaly-field",
       icon: TrendingUp,
       label: "Temperature anomaly layer",
-      description: "Temperature minus climatology",
-      active: layerVisibility.temperatureField,
-      disabled: activeVariable !== "anomaly",
-      disabledReason: 'Switch to the "Anomaly" tab to control this layer',
-      onToggle: () => toggleLayer("temperatureField"),
+      description: "Temperature anomaly relative to climatology",
+      active: layerVisibility.temperatureField && activeVariable === "anomaly",
+      onToggle: () => {
+        if (layerVisibility.temperatureField && activeVariable === "anomaly") {
+          toggleLayer("temperatureField");
+        } else {
+          changeVariable("anomaly");
+          setLayerVisibility((prev) => ({ ...prev, temperatureField: true }));
+        }
+      },
     },
     {
       key: "scientific-grid",
       icon: LayoutGrid,
       label: "0.25° scientific grid",
-      description: "NEER native grid resolution overlay",
+      description: "NEER native 0.25° × 0.25° grid overlay",
       active: layerVisibility.scientificGrid,
       onToggle: () => toggleLayer("scientificGrid"),
     },
@@ -648,60 +765,9 @@ export default function OceanMap({
               visible={layerVisibility.scientificGrid}
             />
 
-            {layerVisibility.graticule &&
-              latLines.map((lat) => {
-                const [, y] = project([OCEAN_DOMAIN.lonMin, lat]);
-                return (
-                  <line
-                    key={`lat-${lat}`}
-                    x1={0}
-                    y1={y}
-                    x2={VIEW_BOX.width}
-                    y2={y}
-                    stroke="rgba(148,197,224,0.14)"
-                    strokeWidth={0.5 / transform.scale}
-                  />
-                );
-              })}
-            {layerVisibility.graticule &&
-              lonLines.map((lon) => {
-                const [x] = project([lon, OCEAN_DOMAIN.latMax]);
-                return (
-                  <line
-                    key={`lon-${lon}`}
-                    x1={x}
-                    y1={0}
-                    x2={x}
-                    y2={VIEW_BOX.height}
-                    stroke="rgba(148,197,224,0.14)"
-                    strokeWidth={0.5 / transform.scale}
-                  />
-                );
-              })}
-
-            {layerVisibility.coastline &&
-              LANDMASSES.map((mass) => (
-                <polygon
-                  key={mass.id}
-                  points={mass.points.map((p) => project(p).join(",")).join(" ")}
-                  fill="#132133"
-                  stroke="rgba(148,197,224,0.3)"
-                  strokeWidth={0.75 / transform.scale}
-                />
-              ))}
-
-            {layerVisibility.domainBoundary && (
-              <rect
-                x={0}
-                y={0}
-                width={VIEW_BOX.width}
-                height={VIEW_BOX.height}
-                fill="none"
-                stroke="rgba(45,212,191,0.55)"
-                strokeWidth={1.5 / transform.scale}
-                strokeDasharray={`${6 / transform.scale} ${5 / transform.scale}`}
-              />
-            )}
+            {graticuleLines}
+            {coastlineElements}
+            {domainBoundaryElement}
           </g>
 
           {/* Fixed-size overlay — graticule labels + hover/selection markers,
@@ -772,10 +838,11 @@ export default function OceanMap({
           <MapControls layers={mapControlLayers} baseLayers={mapBaseLayers} onReset={resetView} />
         </div>
 
-        {/* Zoom controls */}
+        {/* Zoom & domain reset controls */}
         <div className="absolute right-3 top-3 flex flex-col gap-1">
           <ToolbarButton icon={ZoomIn} label="Zoom in" onClick={() => zoomByButton(ZOOM_STEP)} />
           <ToolbarButton icon={ZoomOut} label="Zoom out" onClick={() => zoomByButton(1 / ZOOM_STEP)} />
+          <ToolbarButton icon={RotateCcw} label="Reset / fit to NEER domain" onClick={resetView} />
         </div>
 
         {/* Scientific field — loading state. Non-blocking: the base map
@@ -901,7 +968,7 @@ export default function OceanMap({
         )}
 
         {/* Legend */}
-        <div className="absolute bottom-3 left-3 flex flex-col gap-2 rounded-md border border-border bg-surface-base/90 px-3 py-2 backdrop-blur-sm">
+        <div className="absolute bottom-3 left-3 flex flex-col gap-2 rounded-md border border-border bg-surface-base/90 px-3 py-2 backdrop-blur-sm max-w-[calc(100%-1.5rem)] sm:max-w-xs md:max-w-sm">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-text-muted">
             <span className="flex items-center gap-1.5">
               <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: "#0E2A42" }} aria-hidden="true" />
@@ -918,6 +985,7 @@ export default function OceanMap({
           </div>
 
           <MapLegend
+            variable={activeVariable}
             activeLabel={activeLabel}
             colorConfig={colorConfig}
             sample={legendSample}

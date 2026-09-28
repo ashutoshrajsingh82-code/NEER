@@ -54,6 +54,7 @@ const LayerToggle = forwardRef(function LayerToggle(
     onToggle,
     layout = "icon",
     className,
+    ...rest
   },
   ref
 ) {
@@ -61,7 +62,7 @@ const LayerToggle = forwardRef(function LayerToggle(
 
   if (layout === "row") {
     return (
-      <Tooltip content={disabled ? disabledReason : undefined} position="top">
+      <Tooltip content={disabled ? disabledReason : description} position="top">
         <button
           ref={ref}
           type="button"
@@ -71,19 +72,20 @@ const LayerToggle = forwardRef(function LayerToggle(
           disabled={disabled}
           onClick={() => onToggle?.(!active)}
           className={cn(
-            "flex w-full items-center justify-between gap-3 rounded-sm px-2 py-1.5 text-left text-small neer-transition",
+            "flex w-full items-center justify-between gap-3 rounded-sm px-2 py-1.5 text-left text-small neer-transition select-none",
             "text-text-secondary hover:bg-surface-raised hover:text-text-primary",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:ring-offset-1 focus-visible:ring-offset-surface-overlay",
             disabled && "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-text-secondary",
             className
           )}
+          {...rest}
         >
           <span className="flex min-w-0 items-center gap-2">
             {Icon && (
               <Icon
                 size={ICON_SIZES.sm}
                 strokeWidth={1.75}
-                className={cn("shrink-0", active ? "text-accent-400" : "text-text-muted")}
+                className={cn("shrink-0 neer-transition", active ? "text-accent-400" : "text-text-muted")}
                 aria-hidden="true"
               />
             )}
@@ -129,6 +131,7 @@ const LayerToggle = forwardRef(function LayerToggle(
         disabled && "pointer-events-none opacity-35",
         className
       )}
+      {...rest}
     >
       {Icon && <Icon size={ICON_SIZES.sm} strokeWidth={1.75} aria-hidden="true" />}
     </motion.button>
@@ -136,7 +139,7 @@ const LayerToggle = forwardRef(function LayerToggle(
 
   return (
     <Tooltip content={tooltipText}>
-      <span className="inline-flex">{trigger}</span>
+      {trigger}
     </Tooltip>
   );
 });

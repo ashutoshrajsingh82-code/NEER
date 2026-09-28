@@ -8,10 +8,10 @@ import {
 
 const DOMAIN = { latMin: 5, latMax: 30, lonMin: 45, lonMax: 105 };
 
-// A trivial land predicate: "on land" iff lon is an exact integer >= 80,
+// A trivial land predicate: "on land" iff lon is an exact integer between 80 and 90,
 // just so tests can exercise the land branch without importing the real
 // (much larger) landmass ring data from components/ocean-map/landmask.js.
-const isOnLandStub = (lat, lon) => lon >= 80 && Number.isInteger(lon);
+const isOnLandStub = (lat, lon) => lon >= 80 && lon <= 90 && Number.isInteger(lon);
 
 describe("classifyPointLocation", () => {
   it("classifies a mid-domain, non-land point as ocean", () => {
