@@ -128,20 +128,18 @@ class ArgoEvaluationQueryParams(BaseModel):
 
 class ExplainabilityQueryParams(BaseModel):
     date: _Date = Field(..., description="Date to explain, YYYY-MM-DD.")
-    depth: Optional[float] = Field(
-        None,
-        ge=0,
-        description="Single target depth in metres; omit to explain every model depth level summed.",
-    )
+    lat: float = Field(..., description="Latitude in degrees within the configured NEER domain.")
+    lon: float = Field(..., description="Longitude in degrees within the configured NEER domain.")
+    depth: float = Field(..., ge=0, description="An exact supported model depth in metres.")
 
 
 def explainability_query_params(
     date: _Date = Query(..., description="Date to explain, YYYY-MM-DD."),
-    depth: Optional[float] = Query(
-        None, ge=0, description="Single depth in metres; omit for a whole-profile explanation."
-    ),
+    lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees."),
+    lon: float = Query(..., ge=-180, le=360, description="Longitude in degrees."),
+    depth: float = Query(..., ge=0, description="An exact supported model depth in metres."),
 ) -> ExplainabilityQueryParams:
-    return ExplainabilityQueryParams(date=date, depth=depth)
+    return ExplainabilityQueryParams(date=date, lat=lat, lon=lon, depth=depth)
 
 
 def argo_evaluation_query_params(
@@ -209,8 +207,8 @@ class PointReconstructionResponse(BaseModel):
     lon: float
     date: str
     depth: float
-    temperature: float
-    anomaly: float
+    temperature: Optional[float]
+    anomaly: Optional[float]
     climatology: Optional[float]
     embedding_dim: int
     data_mode: str
@@ -225,9 +223,9 @@ class ProfileReconstructionResponse(BaseModel):
     lon: float
     date: str
     depths: List[float]
-    temperature: List[float]
-    anomaly: List[float]
-    climatology: Optional[List[float]]
+    temperature: List[Optional[float]]
+    anomaly: List[Optional[float]]
+    climatology: Optional[List[Optional[float]]]
     embedding_dim: int
     data_mode: str
     latency_ms: float
@@ -242,8 +240,9 @@ class GridReconstructionResponse(BaseModel):
     depths: Optional[List[float]] = Field(None, description="Present only when depth was omitted.")
     lat: List[float]
     lon: List[float]
-    temperature: Union[List[List[float]], List[List[List[float]]]]
-    climatology: Optional[Union[List[List[float]], List[List[List[float]]]]] = None
+    temperature: Union[List[List[Optional[float]]], List[List[List[Optional[float]]]]]
+    anomaly: Union[List[List[Optional[float]]], List[List[List[Optional[float]]]]]
+    climatology: Optional[Union[List[List[Optional[float]]], List[List[List[Optional[float]]]]]] = None
     data_mode: str
     latency_ms: float
     cache_hit: bool
@@ -345,23 +344,34 @@ class ArgoEvaluationResponse(BaseModel):
 class ExplainabilityChannel(BaseModel):
     name: str
     description: Optional[str] = None
-    importance: float
-    mean_gradient: float
+    attribution: float
 
 
 class ExplainabilityResponse(BaseModel):
     date: str
+    lat: float
+    lon: float
+    climatology_lat: Optional[float] = None
+    climatology_lon: Optional[float] = None
+    temperature: Optional[float] = None
+    climatology: Optional[float] = None
+    anomaly: Optional[float] = None
     data_mode: str
-    predicted_anomaly: float
-    depth: Optional[float] = None
-    depth_index: Optional[int] = None
-    aggregated_over_depths: bool
+    model_version: Optional[str] = None
+    checkpoint_epoch: Optional[int] = None
+    depth: float
+    depth_index: int
+    target: str
     method: str
-    channels: List[ExplainabilityChannel]
-    spatial_saliency: List[List[float]]
-    spatial_saliency_shape: List[int]
-    full_grid_shape: List[int]
+    baseline: str
+    integration_steps: int
+    features: List[ExplainabilityChannel]
+    context_attributions: List[ExplainabilityChannel]
+    attribution_sum: float
+    output_delta_from_baseline: float
+    completeness_error: float
     embedding_dim: int
+    feature_order: List[str]
     notes: List[str]
 
 

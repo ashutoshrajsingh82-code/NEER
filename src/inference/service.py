@@ -70,18 +70,21 @@ class PredictionResult:
 
     Shapes differ by `mode`:
 
-    * ``"point"``   — `temperature`/`anomaly`/`climatology` are floats,
+    * ``"point"``   — `temperature` is the model output in physical units;
+      `anomaly` may be null unless climatology is finite,
       `depth` is a float, `lat`/`lon` are floats.
-    * ``"profile"`` — `temperature`/`anomaly`/`climatology` are
-      `(num_depths,)` arrays, `depth` is the `(num_depths,)` depth axis,
+    * ``"profile"`` — these fields are `(num_depths,)` arrays with missing
+      reference levels represented as NaN internally, `depth` is the axis,
       `lat`/`lon` are floats.
     * ``"grid"``    — `lat`/`lon` are the `(n_lat,)`/`(n_lon,)` coordinate
-      axes; `temperature` (and `climatology`, when a climatology was
-      fitted) is `(n_lat, n_lon)` for one requested depth or
+      axes; `temperature`, `anomaly`, and `climatology` share the same
+      aligned cell dimensions; when no climatology was
+      fitted `temperature` remains populated and anomaly/climatology are missing;
+      grid shape is `(n_lat, n_lon)` for one requested depth or
       `(n_lat, n_lon, num_depths)` for every depth; `anomaly` is the one
-      domain-pooled value (or `(num_depths,)` vector) this grid was
-      built from — see `src/inference/__init__.py` for why the anomaly
-      does not itself vary across the grid.
+      derived anomaly. The current model temperature is domain pooled at each
+      depth, so every grid cell carries the same predicted temperature at a
+      given depth; the anomaly varies with local climatology.
 
     `embedding` is always the `(embed_dim,)` pooled representation the
     prediction came from — the same value regardless of `mode`, since
@@ -89,8 +92,8 @@ class PredictionResult:
     """
 
     mode: str
-    temperature: Union[float, np.ndarray]
-    anomaly: Union[float, np.ndarray]
+    temperature: Union[Optional[float], np.ndarray]
+    anomaly: Union[Optional[float], np.ndarray]
     climatology: Optional[Union[float, np.ndarray]]
     embedding: np.ndarray
     lat: Union[float, np.ndarray]
@@ -136,8 +139,8 @@ class InferenceService:
         it in `eval()` mode and moves it to the chosen device).
     climatology:
         Optional fitted `MonthlyClimatology` (Phase 11). Without one,
-        every prediction's `temperature` equals its `anomaly` and a note
-        is attached explaining why.
+        model temperature remains available, but its anomaly is unavailable;
+        a note is attached explaining why.
     climatology_variable:
         The variable name to query in `climatology`. Defaults to
         `DEFAULT_CLIMATOLOGY_VARIABLE`.
@@ -147,11 +150,11 @@ class InferenceService:
     normalizer_center, normalizer_scale:
         Optional per-depth arrays (length `model.num_depths`). When
         given, the model's raw output is treated as z-scored and
-        de-normalized (`anomaly * scale + center`) before anything else
+        de-normalized (`temperature * scale + center`) before anything else
         sees it — the same linear map `predictions_from_checkpoint`
         applies (`src/argo_validation/predictions.py`). Omit both to
         treat the model's raw output as already being a physical-units
-        anomaly.
+        absolute temperature.
     cache_size:
         Maximum number of distinct (input tensor, date) forward passes
         kept in memory. Least-recently-used entries are evicted first.
@@ -289,9 +292,9 @@ class InferenceService:
     def _forward(self, x: Any, date: str) -> Tuple[np.ndarray, np.ndarray, float, bool]:
         """Run (or fetch from cache) the encoder+decoder for one sample.
 
-        Returns `(anomaly, embedding, latency_ms, cache_hit)`. `anomaly`
-        is `(num_depths,)`, already de-normalized when this service was
-        built with normalizer stats. `latency_ms` measures the whole
+        Returns `(temperature, embedding, latency_ms, cache_hit)`. `temperature`
+        is the model's absolute subsurface-temperature target, already
+        de-normalized when this service was built with normalizer stats. `latency_ms` measures the whole
         call, including the cache lookup, so a hit's latency is honestly
         near-zero rather than the original compute time.
         """
@@ -311,32 +314,40 @@ class InferenceService:
         if cached is not None:
             self._cache.move_to_end(key)
             self.cache_hits += 1
-            anomaly, embedding = cached
+            temperature, embedding = cached
             latency_ms = (time.perf_counter() - start) * 1000.0
-            return anomaly.copy(), embedding.copy(), latency_ms, True
+            return temperature.copy(), embedding.copy(), latency_ms, True
 
         self.cache_misses += 1
         tensor = torch.as_tensor(x_np, dtype=torch.float32, device=self.device)
         with torch.inference_mode():
             embedding_t = self.model.encoder.get_embedding(tensor)
-            anomaly_t = self.model.decoder(embedding_t)
-        anomaly = anomaly_t.squeeze(0).to("cpu").numpy().astype(float)
+            temperature_t = self.model.decoder(embedding_t)
+        temperature = temperature_t.squeeze(0).to("cpu").numpy().astype(float)
         embedding = embedding_t.squeeze(0).to("cpu").numpy().astype(float)
 
         if self._center is not None:
-            anomaly = anomaly * self._scale + self._center
+            temperature = temperature * self._scale + self._center
 
-        self._cache[key] = (anomaly.copy(), embedding.copy())
+        self._cache[key] = (temperature.copy(), embedding.copy())
         if len(self._cache) > self.cache_size:
             self._cache.popitem(last=False)
 
         latency_ms = (time.perf_counter() - start) * 1000.0
-        return anomaly, embedding, latency_ms, False
+        return temperature, embedding, latency_ms, False
 
     # -- shared helpers -----------------------------------------------------
 
     def _nearest_depth_index(self, depth: float) -> int:
         return int(np.argmin(np.abs(np.asarray(self.depths) - float(depth))))
+
+    def output_normalization(self, depth_index: int) -> Tuple[float, float]:
+        """Return the serving output's physical-unit center/scale at depth."""
+        if not 0 <= depth_index < len(self.depths):
+            raise ValueError(f"depth index {depth_index} is outside the model output")
+        if self._center is None or self._scale is None:
+            return 0.0, 1.0
+        return float(self._center[depth_index]), float(self._scale[depth_index])
 
     @staticmethod
     def _month_of(date: Any) -> int:
@@ -345,8 +356,7 @@ class InferenceService:
     def _climatology_notes(self) -> List[str]:
         if self.climatology is None:
             return [
-                "no climatology supplied to this InferenceService; "
-                "'temperature' equals the raw model anomaly, not an absolute value"
+                "no climatology is available; model temperature remains available but anomaly cannot be derived"
             ]
         return []
 
@@ -378,19 +388,20 @@ class InferenceService:
         (`self.depths`) — the model predicts a fixed set of depth
         levels, it does not interpolate between them.
         """
-        anomaly, embedding, latency_ms, cache_hit = self._forward(x, date=str(date))
+        temperature_values, embedding, latency_ms, cache_hit = self._forward(x, date=str(date))
         month = month or self._month_of(date)
         depth_idx = self._nearest_depth_index(depth)
         depth_value = self.depths[depth_idx]
-        anomaly_value = float(anomaly[depth_idx])
+        temperature = float(temperature_values[depth_idx])
         climatology_value = self._climatology_value(lat, lon, month, depth_value)
-        temperature = anomaly_value if climatology_value is None else climatology_value + anomaly_value
+        valid = climatology_value is not None and np.isfinite(climatology_value) and np.isfinite(temperature)
+        anomaly_value = temperature - float(climatology_value) if valid else None
 
         return PredictionResult(
             mode="point",
-            temperature=temperature,
+            temperature=temperature if np.isfinite(temperature) else None,
             anomaly=anomaly_value,
-            climatology=climatology_value,
+            climatology=float(climatology_value) if valid else None,
             embedding=embedding,
             lat=float(lat),
             lon=float(lon),
@@ -412,17 +423,23 @@ class InferenceService:
         month: Optional[int] = None,
     ) -> PredictionResult:
         """Full depth-temperature profile at one location, one date."""
-        anomaly, embedding, latency_ms, cache_hit = self._forward(x, date=str(date))
+        temperature, embedding, latency_ms, cache_hit = self._forward(x, date=str(date))
         month = month or self._month_of(date)
         climatology_profile = self._climatology_profile(lat, lon, month)
-        temperature = (
-            anomaly.copy() if climatology_profile is None else climatology_profile + anomaly
-        )
+        if climatology_profile is None:
+            temperature_profile = np.asarray(temperature, dtype=float)
+            valid_anomaly = np.full_like(temperature_profile, np.nan, dtype=float)
+            climatology_profile = np.full_like(temperature_profile, np.nan, dtype=float)
+        else:
+            climatology_profile = np.asarray(climatology_profile, dtype=float)
+            valid = np.isfinite(climatology_profile) & np.isfinite(temperature)
+            valid_anomaly = np.where(valid, temperature - climatology_profile, np.nan)
+            temperature_profile = np.asarray(temperature, dtype=float)
 
         return PredictionResult(
             mode="profile",
-            temperature=temperature,
-            anomaly=anomaly,
+            temperature=temperature_profile,
+            anomaly=valid_anomaly,
             climatology=climatology_profile,
             embedding=embedding,
             lat=float(lat),
@@ -455,23 +472,24 @@ class InferenceService:
         `temperature`/`climatology` are `(n_lat, n_lon, num_depths)`;
         with a specific `depth`, they are `(n_lat, n_lon)`.
         """
-        anomaly, embedding, latency_ms, cache_hit = self._forward(x, date=str(date))
+        temperature, embedding, latency_ms, cache_hit = self._forward(x, date=str(date))
         month = month or self._month_of(date)
         lat_arr = np.asarray(lats, dtype=float)
         lon_arr = np.asarray(lons, dtype=float)
         notes = self._climatology_notes()
         notes = notes + [
-            "the anomaly is one domain-pooled value per timestep; only the "
-            "climatology term varies across this grid (see src/inference/__init__.py)"
+            "the model output is one domain-pooled temperature per depth; only the "
+            "climatology and derived anomaly vary across this grid"
         ]
 
         if depth is not None:
             depth_idx = self._nearest_depth_index(depth)
             depth_value = self.depths[depth_idx]
-            anomaly_scalar = float(anomaly[depth_idx])
+            temperature_scalar = float(temperature[depth_idx])
             if self.climatology is None:
-                climatology_grid = None
-                temperature_grid = np.full((lat_arr.size, lon_arr.size), anomaly_scalar)
+                climatology_grid = np.full((lat_arr.size, lon_arr.size), np.nan)
+                temperature_grid = np.full((lat_arr.size, lon_arr.size), temperature_scalar)
+                anomaly_grid = np.full((lat_arr.size, lon_arr.size), np.nan)
             else:
                 climatology_grid = np.array(
                     [
@@ -482,12 +500,14 @@ class InferenceService:
                         for la in lat_arr
                     ]
                 )
-                temperature_grid = climatology_grid + anomaly_scalar
+                valid = np.isfinite(climatology_grid) & np.isfinite(temperature_scalar)
+                anomaly_grid = np.where(valid, temperature_scalar - climatology_grid, np.nan)
+                temperature_grid = np.full(climatology_grid.shape, temperature_scalar)
 
             return PredictionResult(
                 mode="grid",
                 temperature=temperature_grid,
-                anomaly=anomaly_scalar,
+                anomaly=anomaly_grid,
                 climatology=climatology_grid,
                 embedding=embedding,
                 lat=lat_arr,
@@ -502,10 +522,9 @@ class InferenceService:
 
         # every depth: (n_lat, n_lon, num_depths)
         if self.climatology is None:
-            climatology_grid = None
-            temperature_grid = np.broadcast_to(
-                anomaly[None, None, :], (lat_arr.size, lon_arr.size, anomaly.size)
-            ).copy()
+            climatology_grid = np.full((lat_arr.size, lon_arr.size, temperature.size), np.nan)
+            temperature_grid = np.broadcast_to(temperature[None, None, :], climatology_grid.shape).copy()
+            anomaly_grid = np.full_like(climatology_grid, np.nan)
         else:
             climatology_grid = np.array(
                 [
@@ -513,12 +532,14 @@ class InferenceService:
                     for la in lat_arr
                 ]
             )
-            temperature_grid = climatology_grid + anomaly[None, None, :]
+            valid = np.isfinite(climatology_grid) & np.isfinite(temperature[None, None, :])
+            anomaly_grid = np.where(valid, temperature[None, None, :] - climatology_grid, np.nan)
+            temperature_grid = np.broadcast_to(temperature[None, None, :], climatology_grid.shape).copy()
 
         return PredictionResult(
             mode="grid",
             temperature=temperature_grid,
-            anomaly=anomaly.copy(),
+            anomaly=anomaly_grid,
             climatology=climatology_grid,
             embedding=embedding,
             lat=lat_arr,

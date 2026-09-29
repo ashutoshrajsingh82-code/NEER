@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from backend.app.errors import NeerApiError
 from backend.app.routers import (
     data_quality,
+    demo,
     dates,
     embedding,
     evaluation,
@@ -66,13 +67,26 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Permissive CORS for local development with the Next.js frontend.
+# Local frontend origins by default. Deployments can provide a comma-separated
+# `NEER_CORS_ORIGINS` allowlist; wildcard origins are deliberately rejected
+# because credentialed CORS must name trusted origins explicitly.
+_DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000,http://127.0.0.1:3000,http://[::1]:3000"
+)
+CORS_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.environ.get("NEER_CORS_ORIGINS", _DEFAULT_CORS_ORIGINS).split(",")
+    if origin.strip()
+]
+if "*" in CORS_ORIGINS:
+    raise RuntimeError("NEER_CORS_ORIGINS must list explicit origins; wildcard CORS is not allowed")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -99,6 +113,7 @@ app.include_router(metrics.router)
 app.include_router(evaluation.router)
 app.include_router(explainability.router)
 app.include_router(data_quality.router)
+app.include_router(demo.router)
 app.include_router(reconstruct_netcdf.router)
 
 

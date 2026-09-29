@@ -13,15 +13,24 @@
 // -----------------------------------------------------------------------------
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { transformWithEsbuild } from "vite";
 
 export default defineConfig({
+  plugins: [{
+    name: "neer-jsx-in-js-transform",
+    enforce: "pre",
+    async transform(code, id) {
+      const normalizedId = id.replaceAll("\\", "/");
+      if (!normalizedId.endsWith(".js") || !/(\/app\/|\/components\/)/.test(normalizedId)) return null;
+      return transformWithEsbuild(code, id, { loader: "jsx", jsx: "automatic" });
+    },
+  }],
   esbuild: {
     loader: "jsx",
     // Same automatic JSX runtime Next.js uses, so component files (which
     // don't `import React`) can be server-rendered in tests.
     jsx: "automatic",
-    include: /.[jt]sx?$/,
-    exclude: [],
+    include: /\.[jt]sx?$/,
   },
   test: {
     environment: "node",

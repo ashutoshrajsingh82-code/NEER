@@ -24,6 +24,8 @@ import {
   isSelectionReady,
   parseDatesPayload,
   parseModelInfoDepths,
+  isDateInDataRange,
+  selectableDateBounds,
   toIsoDate,
 } from "./dateDepthModel.js";
 
@@ -36,6 +38,7 @@ function asApiError(caught) {
 
 export function useDateDepth() {
   const [state, dispatch] = useReducer(dateDepthReducer, undefined, createInitialState);
+  const [modelInfoData, setModelInfoData] = useState(null);
 
   // `retry*` bump a counter that the load effects depend on; initial mount
   // is attempt 0. Each attempt's effect cleanup flips `cancelled`, so a slow
@@ -74,14 +77,17 @@ export function useDateDepth() {
         if (cancelled) return;
         const parsed = parseModelInfoDepths(body);
         if (parsed.ok) {
+          setModelInfoData(body);
           dispatch(dateDepthActions.depthsLoaded(parsed.value));
         } else {
+          setModelInfoData(null);
           const error = new ApiError({ code: "invalid_response", message: parsed.reason, status: 200 });
           dispatch(dateDepthActions.depthsFailed(error, categorizeApiError(error)));
         }
       })
       .catch((caught) => {
         if (cancelled) return;
+        setModelInfoData(null);
         const error = asApiError(caught);
         dispatch(dateDepthActions.depthsFailed(error, categorizeApiError(error)));
       });
@@ -95,6 +101,7 @@ export function useDateDepth() {
     setDatesAttempt((n) => n + 1);
   }, []);
   const retryDepths = useCallback(() => {
+    setModelInfoData(null);
     dispatch(dateDepthActions.depthsLoading());
     setDepthsAttempt((n) => n + 1);
   }, []);
@@ -108,7 +115,7 @@ export function useDateDepth() {
   const selectDate = useCallback((date) => {
     dispatch(dateDepthActions.selectDate(date));
     const iso = toIsoDate(date);
-    return iso !== null && stateRef.current.dates.items.includes(iso);
+    return iso !== null && isDateInDataRange(iso, stateRef.current.dates.items);
   }, []);
   const selectDepth = useCallback((depth) => {
     dispatch(dateDepthActions.selectDepth(depth));
@@ -120,6 +127,7 @@ export function useDateDepth() {
     () => ({
       // ---- dates ----
       availableDates: state.dates.items,
+      selectableDateBounds: selectableDateBounds(state.dates.items),
       selectedDate: state.selectedDate,
       datesStatus: state.dates.status,
       datesError: state.dates.error,
@@ -158,8 +166,9 @@ export function useDateDepth() {
       // ---- combined ----
       /** A valid date AND depth are selected — safe to issue date/depth-parameterised queries. */
       isReady: isSelectionReady(state),
+      modelInfoData,
     }),
-    [state, selectDate, selectDepth, stepDate, retryDates, retryDepths]
+    [state, selectDate, selectDepth, stepDate, retryDates, retryDepths, modelInfoData]
   );
 }
 

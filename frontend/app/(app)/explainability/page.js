@@ -1,12 +1,7 @@
-import RoutePlaceholder from "../_components/RoutePlaceholder";
+import ExplainabilityClient from "./ExplainabilityClient";
 
 export const metadata = { title: "Explainability — NEER" };
 
 export default function ExplainabilityPage() {
-  return (
-    <RoutePlaceholder
-      title="Explainability"
-      description="Model explainability views for individual predictions."
-    />
-  );
+  return <ExplainabilityClient />;
 }

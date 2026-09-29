@@ -20,8 +20,10 @@ import {
   dataQuality,
   dates,
   embedding,
+  evaluationMetrics,
   explainability,
   get,
+  getEmbedding,
   health,
   metrics,
   modelInfo,
@@ -321,6 +323,15 @@ describe("endpoint function behavior", () => {
     expect(url.searchParams.get("date")).toBe("2020-01-15");
   });
 
+  it("getEmbedding() requests one date through the centralized endpoint client", async () => {
+    await getEmbedding({ date: "2024-01-31" });
+    const url = new URL(global.fetch.mock.calls[0][0]);
+    expect(url.pathname).toBe("/embedding");
+    expect(url.searchParams.get("date")).toBe("2024-01-31");
+    expect(url.searchParams.has("lat")).toBe(false);
+    expect(url.searchParams.has("lon")).toBe(false);
+  });
+
   it("metrics() omits split when not provided (backend applies its own default)", async () => {
     await metrics();
     const url = new URL(global.fetch.mock.calls[0][0]);
@@ -332,6 +343,13 @@ describe("endpoint function behavior", () => {
     await metrics({ split: "val" });
     const url = new URL(global.fetch.mock.calls[0][0]);
     expect(url.searchParams.get("split")).toBe("val");
+  });
+
+  it("evaluationMetrics() sends split to the comparison endpoint", async () => {
+    await evaluationMetrics({ split: "test" });
+    const url = new URL(global.fetch.mock.calls[0][0]);
+    expect(url.pathname).toBe("/evaluation/metrics");
+    expect(url.searchParams.get("split")).toBe("test");
   });
 
   it("argoEvaluation() defaults to no demo param (real validation, not the demo opt-in)", async () => {
@@ -347,17 +365,13 @@ describe("endpoint function behavior", () => {
     expect(url.searchParams.get("demo")).toBe("true");
   });
 
-  it("explainability() sends date and omits depth when not given", async () => {
-    await explainability({ date: "2020-01-15" });
+  it("explainability() sends the selected date, location, and exact depth", async () => {
+    await explainability({ date: "2020-01-15", lat: 12.3, lon: 54.6, depth: 100 });
     const url = new URL(global.fetch.mock.calls[0][0]);
     expect(url.pathname).toBe("/explainability");
     expect(url.searchParams.get("date")).toBe("2020-01-15");
-    expect(url.searchParams.has("depth")).toBe(false);
-  });
-
-  it("explainability() includes depth when given", async () => {
-    await explainability({ date: "2020-01-15", depth: 100 });
-    const url = new URL(global.fetch.mock.calls[0][0]);
+    expect(url.searchParams.get("lat")).toBe("12.3");
+    expect(url.searchParams.get("lon")).toBe("54.6");
     expect(url.searchParams.get("depth")).toBe("100");
   });
 
@@ -371,7 +385,7 @@ describe("endpoint function behavior", () => {
     // Phase 36A: both now validate their body, so the mocks return valid ones.
     global.fetch
       .mockResolvedValueOnce(mockResponse({ bodyText: JSON.stringify({ dates: ["2020-01-01"] }) }))
-      .mockResolvedValueOnce(mockResponse({ bodyText: JSON.stringify({ architecture: {} }) }));
+      .mockResolvedValueOnce(mockResponse({ bodyText: JSON.stringify({ architecture: { depths: [0, 5], num_depths: 2 } }) }));
     await dates();
     await modelInfo();
     expect(global.fetch.mock.calls[0][0]).toBe(`${BASE_URL}/dates`);

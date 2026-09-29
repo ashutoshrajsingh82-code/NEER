@@ -166,7 +166,7 @@ function MapLegend({
 
   const config = colorConfig ?? VARIABLE_COLOR_CONFIG[variable] ?? null;
   const isAnomaly = variable === "anomaly" || config?.kind === "diverging";
-  const label = activeLabel ?? (isAnomaly ? "Temperature Anomaly" : "Sea Surface Temp.");
+  const label = activeLabel ?? (isAnomaly ? "ANOMALY" : "MODEL OUTPUT");
   const effectiveUnit = unit ?? config?.unit ?? "";
   const sampler = sample ?? (config?.kind === "diverging" ? divergingColor : thermalColor);
 
@@ -213,7 +213,7 @@ function MapLegend({
       <div className="flex items-center justify-between gap-2">
         <p className="min-w-0 truncate text-caption font-semibold uppercase tracking-wider text-text-muted">
           {label}
-          {effectiveUnit && <span className="font-mono normal-case text-text-disabled"> · {effectiveUnit}</span>}
+          {effectiveUnit && <span className="font-mono normal-case text-text-disabled"> · {isAnomaly ? "Temperature Anomaly" : "Temperature"} ({effectiveUnit})</span>}
         </p>
         <button
           type="button"

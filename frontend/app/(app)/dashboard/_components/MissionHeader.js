@@ -48,6 +48,7 @@ export default function MissionHeader({ className }) {
             <h1 className="text-h2 font-semibold tracking-tight text-text-primary">NEER</h1>
             <span className="text-small text-text-muted">Neural Estimation of Essential ocean Records</span>
           </div>
+          <p className="mt-1 text-caption text-text-secondary">Satellite-to-subsurface temperature reconstruction · North Indian Ocean</p>
 
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <Badge variant="accent">SIH26066</Badge>

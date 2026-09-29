@@ -20,7 +20,7 @@ from tests._backend_fixtures import (  # noqa: E402
     repository_no_model,
 )
 
-VALID_PARAMS = {"date": DATES[1]}
+VALID_PARAMS = {"date": DATES[1], "lat": 15.0, "lon": 55.0, "depth": 100.0}
 
 
 def test_explainability_valid_request_status_code(client):
@@ -30,22 +30,29 @@ def test_explainability_valid_request_status_code(client):
 def test_explainability_response_schema(client):
     data = client.get("/explainability", params=VALID_PARAMS).json()
     assert data["date"] == VALID_PARAMS["date"]
-    assert data["aggregated_over_depths"] is True
-    assert data["depth"] is None
-    assert data["method"] == "gradient_x_input"
-    assert isinstance(data["channels"], list) and data["channels"]
-    assert "name" in data["channels"][0]
-    assert "importance" in data["channels"][0]
-    importances = [c["importance"] for c in data["channels"]]
-    assert pytest.approx(sum(importances), abs=1e-5) == 1.0
-    assert len(data["spatial_saliency"]) == data["spatial_saliency_shape"][0]
+    assert data["lat"] == VALID_PARAMS["lat"]
+    assert data["lon"] == VALID_PARAMS["lon"]
+    assert data["depth"] == VALID_PARAMS["depth"]
+    assert data["method"] == "Integrated Gradients"
+    assert data["baseline"]
+    assert data["feature_order"] == ["sst", "sss", "sla", "u_current", "v_current", "u_wind", "v_wind"]
+    assert [item["name"] for item in data["features"]] == data["feature_order"]
+    assert len(data["features"]) == 7
+    assert all(isinstance(item["attribution"], (int, float)) for item in data["features"])
+    assert data["attribution_sum"] == pytest.approx(
+        data["output_delta_from_baseline"] + data["completeness_error"], abs=1e-5
+    )
+    assert isinstance(data["temperature"], float)
+    assert data["climatology"] is None
+    assert data["anomaly"] is None
 
 
-def test_explainability_specific_depth_is_not_aggregated(client):
-    data = client.get("/explainability", params={**VALID_PARAMS, "depth": 100.0}).json()
-    assert data["aggregated_over_depths"] is False
+def test_explainability_depth_and_location_are_echoed(client):
+    data = client.get("/explainability", params={**VALID_PARAMS, "lat": 12.3, "lon": 54.6}).json()
     assert data["depth"] == 100.0
-    assert data["depth_index"] is not None
+    assert data["depth_index"] == 7
+    assert data["lat"] == 12.3
+    assert data["lon"] == 54.6
 
 
 def test_explainability_missing_date_is_422(client):
@@ -56,8 +63,18 @@ def test_explainability_negative_depth_is_422(client):
     assert client.get("/explainability", params={**VALID_PARAMS, "depth": -5.0}).status_code == 422
 
 
+def test_explainability_requires_location_and_depth(client):
+    assert client.get("/explainability", params={"date": DATES[1]}).status_code == 422
+
+
+def test_explainability_rejects_unsupported_depth(client):
+    response = client.get("/explainability", params={**VALID_PARAMS, "depth": 95.0})
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_parameter"
+
+
 def test_explainability_unavailable_date_is_404(client):
-    response = client.get("/explainability", params={"date": "2099-01-01"})
+    response = client.get("/explainability", params={**VALID_PARAMS, "date": "2099-01-01"})
     assert response.status_code == 404
     assert response.json()["error"] == "date_not_found"
 

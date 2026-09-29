@@ -193,13 +193,14 @@ def test_predict_point_snaps_to_nearest_depth(service, sample_input):
     assert result.depth == 0.0  # nearest of (0, 10, 100, 500)
 
 
-def test_predict_point_without_climatology_falls_back_to_anomaly_only():
+def test_predict_point_without_climatology_marks_scientific_values_unavailable():
     model = _small_model()
     service = InferenceService(model, device="cpu")
     x = torch.randn(IN_CHANNELS, GRID_H, GRID_W)
     result = service.predict_point(x, lat=10.0, lon=50.0, date="2021-07-15", depth=10.0)
     assert result.climatology is None
-    assert result.temperature == pytest.approx(result.anomaly)
+    assert result.temperature is not None and np.isfinite(result.temperature)
+    assert result.anomaly is None
     assert any("no climatology" in note for note in result.notes)
 
 
@@ -215,7 +216,7 @@ def test_predict_profile_returns_full_depth_arrays(service, sample_input):
     assert result.anomaly.shape == (len(DEPTHS),)
     assert result.climatology.shape == (len(DEPTHS),)
     np.testing.assert_allclose(result.depth, np.asarray(DEPTHS))
-    np.testing.assert_allclose(result.temperature, result.climatology + result.anomaly)
+    np.testing.assert_allclose(result.temperature - result.climatology, result.anomaly)
 
 
 def test_predict_profile_and_predict_point_agree_at_the_same_depth(service, sample_input):
@@ -236,15 +237,15 @@ def test_predict_grid_single_depth_shape_and_values(service, sample_input, grid_
     assert result.mode == "grid"
     assert result.temperature.shape == (lats.size, lons.size)
     assert result.climatology.shape == (lats.size, lons.size)
-    assert isinstance(result.anomaly, float)  # one domain-pooled value for this grid
-    np.testing.assert_allclose(result.temperature, result.climatology + result.anomaly)
+    assert result.anomaly.shape == (lats.size, lons.size)
+    np.testing.assert_allclose(result.temperature - result.climatology, result.anomaly)
 
 
 def test_predict_grid_all_depths_shape(service, sample_input, grid_coords):
     lats, lons = grid_coords
     result = service.predict_grid(sample_input, lats=lats, lons=lons, date="2021-07-15")
     assert result.temperature.shape == (lats.size, lons.size, len(DEPTHS))
-    assert result.anomaly.shape == (len(DEPTHS),)
+    assert result.anomaly.shape == (lats.size, lons.size, len(DEPTHS))
 
 
 def test_predict_grid_matches_predict_point_at_a_grid_cell(service, sample_input, grid_coords):

@@ -43,12 +43,26 @@ def test_data_quality_response_schema(client):
     assert data["dates"]["count"] > 0
 
 
+def test_data_quality_exposes_actual_grid_counts_and_axis_resolution(client):
+    data = client.get("/data/quality").json()
+    grid = data["coverage_grid"]
+    assert grid["lat"] == sorted(grid["lat"])
+    assert grid["lon"] == sorted(grid["lon"])
+    assert len(grid["cells"]) == data["spatial_coverage"]["grid_shape"][0]
+    assert sum(value == 1 for row in grid["cells"] for value in row) == grid["valid_cells"]
+    assert sum(value == 0 for row in grid["cells"] for value in row) == grid["missing_cells"]
+    assert data["observed_input_cells"]["n_valid"] + data["observed_input_cells"]["n_missing"] == data["observed_input_cells"]["n_cells"]
+    assert data["grid_metadata"]["lat_resolution"]["uniform"] is True
+    assert data["provenance"]["source"] is None
+
+
 def test_data_quality_with_targets(client_metrics):
     data = client_metrics.get("/data/quality").json()
     assert data["targets"] is not None
     assert "variables" in data["targets"]
     assert "subsurface_temp" in data["targets"]["variables"]
     assert data["targets"]["valid_fraction"] == 1.0
+    assert data["grid_metadata"]["target_depths"]
 
 
 def test_data_quality_without_data_is_503(client_no_data):

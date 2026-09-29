@@ -17,6 +17,8 @@ services:
       - ./backend:/app/backend
       - ./src:/app/src
       - ./configs:/app/configs
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
 
   frontend:
     build:
@@ -26,7 +28,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
     depends_on:
       - backend
     volumes:

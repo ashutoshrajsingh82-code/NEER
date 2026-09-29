@@ -3,9 +3,8 @@
 // -----------------------------------------------------------------------------
 // NEER Dashboard — CalendarPopover  (Phase 36B)
 //
-// A month-view date picker restricted to the dates the backend lists (GET
-// /dates, via DateDepthContext). Unavailable days are shown but cannot be
-// selected; the month navigation cannot leave the range that has data.
+// A month-view date picker spanning months with backend samples. Every day in
+// those months is selectable; the backend interpolates between monthly samples.
 //
 // Rendered through a portal with fixed positioning: the controls sit inside a
 // Panel that is `overflow-hidden`, which would clip an absolutely-positioned
@@ -35,6 +34,8 @@ import {
   moveCalendarFocus,
   shiftMonth,
   yearsWithDates,
+  daysInMonth,
+  formatIso,
 } from "@/lib/dateDepthControls";
 import { formatDate } from "@/lib/format";
 
@@ -48,8 +49,17 @@ const POPOVER_WIDTH = 288;
  * @param {React.RefObject<HTMLElement>} anchorRef - the trigger the popover is placed under
  */
 export default function CalendarPopover({ availableDates, selectedDate, onSelect, onClose, anchorRef }) {
-  const availableSet = useMemo(() => new Set(availableDates), [availableDates]);
   const range = useMemo(() => monthRange(availableDates), [availableDates]);
+  const availableSet = useMemo(() => {
+    const selectable = new Set();
+    if (!range) return selectable;
+    let cursor = { ...range.first };
+    while (cursor.year < range.last.year || (cursor.year === range.last.year && cursor.month <= range.last.month)) {
+      for (let day = 1; day <= daysInMonth(cursor.year, cursor.month); day += 1) selectable.add(formatIso(cursor.year, cursor.month, day));
+      cursor = shiftMonth(cursor, 1);
+    }
+    return selectable;
+  }, [range]);
   const years = useMemo(() => yearsWithDates(availableDates), [availableDates]);
 
   const startMonth = useMemo(() => initialMonth(selectedDate, availableDates), [selectedDate, availableDates]);
@@ -143,7 +153,7 @@ export default function CalendarPopover({ availableDates, selectedDate, onSelect
     <div
       ref={popoverRef}
       role="dialog"
-      aria-label="Choose an available date"
+      aria-label="Choose any calendar day"
       style={{
         position: "fixed",
         top: position?.top ?? -9999,
@@ -220,8 +230,8 @@ export default function CalendarPopover({ availableDates, selectedDate, onSelect
                       tabIndex={cell.iso === focusIso ? 0 : -1}
                       aria-disabled={!cell.available}
                       aria-current={cell.selected ? "date" : undefined}
-                      aria-label={`${formatDate(cell.iso)}${cell.available ? "" : " — no data available"}`}
-                      title={cell.available ? undefined : "No data for this date"}
+                      aria-label={`${formatDate(cell.iso)}${cell.available ? "" : " — outside dataset range"}`}
+                      title={cell.available ? undefined : "Outside dataset range"}
                       onClick={() => cell.available && onSelect(cell.iso)}
                       onKeyDown={(event) => handleDayKeyDown(event, cell)}
                       onFocus={() => setFocusIso(cell.iso)}
@@ -247,8 +257,8 @@ export default function CalendarPopover({ availableDates, selectedDate, onSelect
 
       <p className="mt-2 border-t border-border-subtle pt-2 text-caption text-text-muted" role="status">
         {availableInMonth
-          ? `${availableInMonth} date${availableInMonth === 1 ? "" : "s"} with data in ${monthLabel}`
-          : `No data in ${monthLabel}`}
+          ? `Any day selectable · monthly source fields interpolated for ${monthLabel}`
+          : `No dataset coverage in ${monthLabel}`}
       </p>
     </div>,
     document.body

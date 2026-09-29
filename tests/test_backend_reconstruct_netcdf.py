@@ -92,8 +92,10 @@ def test_reconstruct_netcdf_single_depth_roundtrip(client, tmp_path):
     assert "temperature" in dataset.variables
     temp_var = dataset.variables["temperature"]
     assert temp_var.units == "degC"
-    assert temp_var.dims == ("time", "lat", "lon")
+    assert temp_var.dims == ("time", "depth", "lat", "lon")
     assert "time" in dataset.coords
+    assert "depth" in dataset.coords
+    assert dataset.coords["depth"].tolist() == [100.0]
     assert "lat" in dataset.coords
     assert "lon" in dataset.coords
     assert temp_var.attrs.get("depth_m") == 100.0

@@ -9,19 +9,14 @@ pipeline this phase describes:
     -> VisionTransformer                   (Phase 14)
     -> get_embedding                       (Phase 15) -> (batch, 256)
     -> DepthEmbedding, inside DepthDecoder (Phase 16)
-    -> DepthDecoder                        (Phase 17) -> (batch, 15) anomalies
-    -> + climatology                       (Phase 11, src.data.preprocessing.climatology)
-    -> reconstructed absolute temperature, (batch, 15)
+    -> DepthDecoder                        (Phase 17) -> (batch, 15) normalized targets
 
 `NEERModel` does not introduce any new learnable computation of its
 own — every weight belongs to the `CNNViTEncoder` or `DepthDecoder` it
-holds. It exists purely to compose them under one object with one
-clear input contract, and to attach the one non-learned step the
-pipeline still needs: turning a predicted anomaly back into a
-physical-units temperature by adding it to a climatological baseline
-(Phase 11's `MonthlyClimatology`, which is fitted separately, from
-data this tensor-only model never sees — lat/lon/time metadata, not
-surface-field channels).
+holds. It exists to compose them under one object with one clear input
+contract. Training targets are normalized absolute subsurface temperatures;
+serving reverses that normalization with training-only target statistics.
+Climatology is used to derive anomalies after temperature prediction.
 
 Optional GNN (Phase 22)
 -----------------------
@@ -117,12 +112,11 @@ if _TORCH_AVAILABLE:
         --------
         >>> model = NEERModel().eval()
         >>> x = torch.randn(2, NEER_N_CHANNELS, 101, 241)
-        >>> model(x).shape                    # forward(): anomalies
+        >>> model(x).shape                    # forward(): normalized targets
         torch.Size([2, 15])
         >>> model.get_embedding(x).shape      # get_embedding(): Phase 15's representation
         torch.Size([2, 256])
-        >>> climatology = torch.zeros(15)     # a real caller uses MonthlyClimatology here
-        >>> model.predict_profile(x, climatology).shape
+        >>> model.predict_profile(x).shape
         torch.Size([2, 15])
         """
 
@@ -257,7 +251,7 @@ if _TORCH_AVAILABLE:
 
             Returns
             -------
-            `(batch, num_depths)` predicted temperature anomalies
+            `(batch, num_depths)` predicted normalized absolute targets
             (delta_T), one per `self.depths`, in that exact order.
             """
             embedding = self.encoder.get_embedding(x)
@@ -346,58 +340,14 @@ if _TORCH_AVAILABLE:
             mean, log_variance = self.forward_with_uncertainty(x)
             return mean, log_variance_to_sigma(log_variance)
 
-        def predict_profile(
-            self, x: "torch.Tensor", climatology: Union["torch.Tensor", "object"]
-        ) -> "torch.Tensor":
-            """Full inference: surface fields -> reconstructed temperature profile.
+        def predict_profile(self, x: "torch.Tensor") -> "torch.Tensor":
+            """Return normalized per-depth target predictions.
 
-            Runs `forward` to get predicted anomalies, then adds the
-            supplied climatology — `climatology + predicted_delta_T`,
-            exactly the formula in
-            `src.data.preprocessing.climatology.reconstruct_temperature`.
-            This method reimplements that one-line addition for torch
-            tensors (rather than calling the numpy version directly)
-            so the whole pipeline stays in torch with no CPU/numpy
-            round-trip; the underlying relationship, and where a real
-            climatology profile comes from, is documented there.
-
-            Parameters
-            ----------
-            x:
-                `(batch, NEER_N_CHANNELS, H, W)` surface fields.
-            climatology:
-                Array-like, convertible to a tensor of shape
-                `(num_depths,)` or `(batch, num_depths)` — the
-                climatological baseline temperature at each target
-                depth. A `(num_depths,)` profile is broadcast across
-                the batch; a per-sample `(batch, num_depths)` array is
-                used as-is (the usual case, since climatology varies
-                by each sample's location and calendar month — see
-                `MonthlyClimatology.depth_profile`).
-
-            Returns
-            -------
-            `(batch, num_depths)` reconstructed absolute temperature,
-            in whatever physical units `climatology` was given in.
+            This model-level helper does not add climatology. Serving converts
+            the normalized absolute temperature target to physical units,
+            then derives anomaly by subtracting the local climatology.
             """
-            anomalies = self.forward(x)
-
-            climatology_t = (
-                climatology
-                if torch.is_tensor(climatology)
-                else torch.as_tensor(climatology, dtype=torch.float32)
-            )
-            climatology_t = climatology_t.to(dtype=anomalies.dtype, device=anomalies.device)
-
-            if climatology_t.shape == (self.num_depths,):
-                climatology_t = climatology_t.unsqueeze(0).expand_as(anomalies)
-            elif climatology_t.shape != anomalies.shape:
-                raise ValueError(
-                    f"climatology has shape {tuple(climatology_t.shape)}; expected "
-                    f"({self.num_depths},) or {tuple(anomalies.shape)}"
-                )
-
-            return climatology_t + anomalies
+            return self.forward(x)
 
         def load_pretrained_encoder(
             self,

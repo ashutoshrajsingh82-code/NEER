@@ -9,9 +9,9 @@
 // What counts as "complete" is what the existing consumers actually read —
 // PointInspection (temperature, anomaly, data_mode, cache_hit, latency_ms,
 // notes) — plus every other non-nullable field of the backend schema. The
-// backend declares `temperature`/`anomaly` as non-null floats, so a null or
-// non-finite value there is a broken response, never a "no data" signal, and
-// is rejected rather than coerced or defaulted.
+// Model temperature can remain available when no fitted climatology exists;
+// in that case both climatology and anomaly are null. Partial/inconsistent
+// reference values are rejected rather than coerced or defaulted.
 //
 // Nothing here fabricates or repairs a value: a body either passes unchanged
 // or is rejected with a reason.
@@ -32,8 +32,6 @@ const REQUIRED_FIELDS = {
   lon: [isFiniteNumber, "a finite number"],
   date: [isIsoDate, 'a "YYYY-MM-DD" date'],
   depth: [(v) => isFiniteNumber(v) && v >= 0, "a finite, non-negative number"],
-  temperature: [isFiniteNumber, "a finite number"],
-  anomaly: [isFiniteNumber, "a finite number"],
   embedding_dim: [(v) => Number.isInteger(v) && v >= 0, "a non-negative integer"],
   data_mode: [isNonEmptyString, "a non-empty string"],
   latency_ms: [(v) => isFiniteNumber(v) && v >= 0, "a finite, non-negative number"],
@@ -66,11 +64,27 @@ export function validatePointReconstruction(raw, { date } = {}) {
       invalid.push(`${field} (expected ${description})`);
     }
   }
+  for (const field of ["temperature", "anomaly"]) {
+    if (!(field in raw)) missing.push(field);
+    else if (raw[field] !== null && !isFiniteNumber(raw[field])) invalid.push(`${field} (expected a finite number or null)`);
+  }
   // Nullable, but the key itself must be present and, if not null, a real number.
   if (!("climatology" in raw)) {
     missing.push("climatology");
   } else if (raw.climatology !== null && !isFiniteNumber(raw.climatology)) {
     invalid.push("climatology (expected a finite number or null)");
+  }
+  const hasTemperature = isFiniteNumber(raw.temperature);
+  const hasClimatology = isFiniteNumber(raw.climatology);
+  const hasAnomaly = isFiniteNumber(raw.anomaly);
+  const noReference = raw.climatology === null && raw.anomaly === null;
+  const allUnavailable = raw.temperature === null && noReference;
+  const completeReference = hasTemperature && hasClimatology && hasAnomaly;
+  if (!allUnavailable && !(hasTemperature && noReference) && !completeReference) {
+    invalid.push("temperature may stand alone only when climatology and anomaly are both unavailable");
+  }
+  if (completeReference && Math.abs(raw.anomaly - (raw.temperature - raw.climatology)) > 1e-5) {
+    invalid.push("anomaly does not match model output minus climatology");
   }
 
   if (missing.length > 0) {

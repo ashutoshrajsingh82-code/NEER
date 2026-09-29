@@ -45,10 +45,10 @@ order.
 Phase 18 adds `NEERModel` (`src/models/neer_model.py`): the complete
 pipeline, composing a `CNNViTEncoder` and a `DepthDecoder` under one
 `torch.nn.Module`. `forward` runs surface fields through to 15
-predicted anomalies; `get_embedding` exposes the Phase 15 spatial
-embedding at the whole-model level; `predict_profile` adds a supplied
-climatology baseline (Phase 11, `src.data.preprocessing.climatology`)
-to reconstruct an absolute temperature profile. No new learnable
+predicted normalized absolute-temperature targets; `get_embedding` exposes
+the Phase 15 spatial embedding at the whole-model level; `predict_profile`
+returns the same target profile. Serving de-normalizes the output and derives
+anomaly by subtracting climatology. No new learnable
 weights of its own, and no training — see the module docstring.
 
 Phase 22 adds an optional graph refinement (`src/models/gnn.py`):

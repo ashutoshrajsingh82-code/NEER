@@ -141,53 +141,30 @@ def test_get_embedding_shape_and_matches_encoder():
 # --------------------------------------------------------------------------
 
 
-def test_predict_profile_adds_climatology_to_forward_output():
+def test_predict_profile_returns_forward_target_without_adding_climatology():
     model = _small_model().eval()
     x = torch.randn(3, 16, 12, 12)
-    climatology = torch.tensor([10.0, 8.0, 4.0, 2.0])  # (num_depths,)
     with torch.no_grad():
-        anomalies = model(x)
-        reconstructed = model.predict_profile(x, climatology)
+        target = model(x)
+        reconstructed = model.predict_profile(x)
     assert reconstructed.shape == (3, 4)
-    assert torch.allclose(reconstructed, anomalies + climatology.unsqueeze(0))
+    assert torch.allclose(reconstructed, target)
 
 
-def test_predict_profile_accepts_per_sample_climatology():
+def test_predict_profile_rejects_legacy_climatology_argument():
     model = _small_model().eval()
     x = torch.randn(3, 16, 12, 12)
-    climatology = torch.rand(3, 4) * 20.0  # (batch, num_depths)
-    with torch.no_grad():
-        anomalies = model(x)
-        reconstructed = model.predict_profile(x, climatology)
-    assert torch.allclose(reconstructed, anomalies + climatology)
+    with pytest.raises(TypeError):
+        model.predict_profile(x, torch.rand(3, 4) * 20.0)
 
 
-def test_predict_profile_accepts_plain_list_climatology():
+def test_predict_profile_returns_finite_batch_target():
     model = _small_model().eval()
     x = torch.randn(2, 16, 12, 12)
-    climatology = [10.0, 8.0, 4.0, 2.0]
     with torch.no_grad():
-        reconstructed = model.predict_profile(x, climatology)
+        reconstructed = model.predict_profile(x)
     assert reconstructed.shape == (2, 4)
     assert torch.isfinite(reconstructed).all()
-
-
-def test_predict_profile_rejects_mismatched_climatology_shape():
-    model = _small_model().eval()
-    x = torch.randn(2, 16, 12, 12)
-    with pytest.raises(ValueError, match="climatology"):
-        model.predict_profile(x, torch.zeros(3))  # wrong length
-
-
-def test_zero_climatology_reconstructs_to_the_raw_anomaly():
-    # climatology=0 is the identity case: reconstructed temperature
-    # should equal the predicted anomaly exactly.
-    model = _small_model().eval()
-    x = torch.randn(2, 16, 12, 12)
-    with torch.no_grad():
-        anomalies = model(x)
-        reconstructed = model.predict_profile(x, torch.zeros(4))
-    assert torch.equal(reconstructed, anomalies)
 
 
 # --------------------------------------------------------------------------
@@ -211,23 +188,18 @@ def test_complete_cpu_forward_pass():
 
     with torch.no_grad():
         embedding = model.get_embedding(x)
-        anomalies = model(x)
-
-        # A real caller would build this from
-        # MonthlyClimatology.depth_profile(...) per sample; a flat
-        # baseline is enough to exercise the wiring here.
-        climatology = torch.full((batch, model.num_depths), 15.0, device=device)
-        temperature = model.predict_profile(x, climatology)
+        targets = model(x)
+        temperature = model.predict_profile(x)
 
     assert embedding.shape == (batch, 256)
     assert torch.isfinite(embedding).all()
 
-    assert anomalies.shape == (batch, 15)
-    assert torch.isfinite(anomalies).all()
+    assert targets.shape == (batch, 15)
+    assert torch.isfinite(targets).all()
 
     assert temperature.shape == (batch, 15)
     assert torch.isfinite(temperature).all()
-    assert torch.allclose(temperature, anomalies + 15.0)
+    assert torch.allclose(temperature, targets)
 
     assert model.depths == DEFAULT_DEPTHS
     assert temperature.device.type == "cpu"
@@ -272,8 +244,7 @@ def test_gradients_flow_from_forward_to_every_parameter():
 def test_gradients_flow_through_predict_profile_back_to_the_encoder():
     model = _small_model()
     x = torch.randn(2, 16, 12, 12, requires_grad=True)
-    climatology = torch.rand(4)
-    model.predict_profile(x, climatology).sum().backward()
+    model.predict_profile(x).sum().backward()
     assert x.grad is not None and torch.isfinite(x.grad).all()
     for name, param in model.named_parameters():
         assert param.grad is not None, f"no gradient reached {name}"

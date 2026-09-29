@@ -111,17 +111,18 @@ describe("runReconstruction — success", () => {
     await expect(runReconstruction(INPUT)).resolves.toEqual(body);
   });
 
-  it("accepts a null climatology (nullable in the backend schema)", async () => {
-    global.fetch.mockResolvedValue(okJson(validBody({ climatology: null })));
+  it("accepts unavailable paired model output, anomaly, and climatology", async () => {
+    global.fetch.mockResolvedValue(okJson(validBody({ temperature: null, anomaly: null, climatology: null })));
     const result = await runReconstruction(INPUT);
     expect(result.climatology).toBeNull();
-    expect(result.temperature).toBe(24.31);
+    expect(result.temperature).toBeNull();
   });
 
-  it("returns the snapped depth the backend used, not the requested one", async () => {
-    global.fetch.mockResolvedValue(okJson(validBody({ depth: 100 })));
-    const result = await runReconstruction({ ...INPUT, depth: 90 });
-    expect(result.depth).toBe(100);
+  it("rejects a depth that is not in the supported model levels", async () => {
+    await expect(runReconstruction({ ...INPUT, depth: 90 })).rejects.toMatchObject({
+      code: API_ERROR_CODES.VALIDATION,
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });
 

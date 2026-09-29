@@ -20,20 +20,37 @@
 // -----------------------------------------------------------------------------
 
 import { OceanMap } from "@/components/ocean-map";
-import { usePointInspection } from "../_context/PointInspectionContext";
+import { useNeerContext } from "../_context/NeerContext";
 import { useMapFieldStatus } from "./MapFieldStatusContext";
+import { useShell } from "@/components/shell/ShellContext";
+import { useEffect } from "react";
 
 export default function OceanMapSection() {
-  const { dataMode, date, depth, selectedPoint, selectPoint } = usePointInspection();
+  const { dataMode, date, depth, selectedPoint, selectPoint, variableMode, setVariableMode } = useNeerContext();
+  const { setInspectionOpen } = useShell();
   const { setStatus } = useMapFieldStatus();
+
+  useEffect(() => {
+    if (selectedPoint) setInspectionOpen(true);
+  }, [selectedPoint, setInspectionOpen]);
+
+  function handleSelectPoint(point) {
+    selectPoint(point);
+    setInspectionOpen(true);
+  }
 
   return (
     <OceanMap
       dataMode={dataMode}
+      variable={variableMode === "anomaly" ? "anomaly" : "sst"}
+      onVariableChange={(value) => {
+        if (value === "anomaly") setVariableMode("anomaly");
+        if (value === "sst") setVariableMode("temperature");
+      }}
       date={date}
       depth={depth}
       selectedPoint={selectedPoint}
-      onSelectPoint={selectPoint}
+      onSelectPoint={handleSelectPoint}
       onFieldStatusChange={setStatus}
     />
   );

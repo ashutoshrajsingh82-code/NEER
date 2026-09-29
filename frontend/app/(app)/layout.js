@@ -47,15 +47,21 @@
 // -----------------------------------------------------------------------------
 
 import { useState } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { AnimatePresence, motion } from "framer-motion";
 import { Compass } from "lucide-react";
 import { AppShell, InspectionPanel, KPIDrawer, MainContent, Sidebar, TopNavigation } from "@/components/shell";
-import { Panel, StatusIndicator } from "@/components/ui";
+import { Panel } from "@/components/ui";
 import { PointInspection } from "@/components/inspection";
 import { DateDepthProvider } from "./dashboard/_context/DateDepthContext";
-import { PointInspectionProvider, usePointInspection } from "./dashboard/_context/PointInspectionContext";
+import { PointInspectionProvider } from "./dashboard/_context/PointInspectionContext";
 import DashboardKPIs from "./dashboard/_components/DashboardKPIs";
 import { formatLat, formatLon } from "@/lib/oceanDomain";
+import { useNeerContext } from "./dashboard/_context/NeerContext";
+import { formatDepth } from "@/lib/oceanDomain";
+import DateControls from "./dashboard/_components/DateControls";
+import DemoControls from "./dashboard/_components/DemoControls";
 
 const MAIN_CONTENT_ID = "neer-main-content";
 
@@ -78,19 +84,16 @@ export default function AppRouteGroupLayout({ children }) {
 function AppShellContent({ children }) {
   const pathname = usePathname();
   const isDashboard = pathname === "/dashboard";
-  const { selectedPoint, clearSelection, dataMode, date, depth, pointInspection, pointStatus } =
-    usePointInspection();
+  const { selectedPoint, clearSelection, dataMode, date, depth, pointInspection, pointStatus, modelInfoData, variableMode, setVariableMode, availableDates, availableDepths, selectDate, selectDepth, datesStatus, datesError, canStepPrev, canStepNext, stepDate, retryDates, depthsStatus, depthsError, retryDepths } = useNeerContext();
 
   // Starts open: on desktop/xl there is currently no in-page control to
   // reopen it once closed (a future page can add one via headerActions/a
   // toolbar button), so defaulting to open keeps the panel reachable.
   const [inspectorOpen, setInspectorOpen] = useState(true);
 
-  const inspectionSubtitle = isDashboard
-    ? selectedPoint
-      ? `${formatLat(selectedPoint.lat)}, ${formatLon(selectedPoint.lon)}`
-      : "Click the map to inspect a location"
-    : "No selection";
+  const inspectionSubtitle = selectedPoint
+    ? `${formatLat(selectedPoint.lat)}, ${formatLon(selectedPoint.lon)}`
+    : isDashboard ? "Click the map to inspect a location" : "No location selected";
 
   return (
     <>
@@ -105,17 +108,17 @@ function AppShellContent({ children }) {
 
       <AppShell
         navigation={
-          <TopNavigation title="NEER" status={<StatusIndicator status="online" label="System nominal" />} />
+          <TopNavigation title="NEER" />
         }
         sidebar={<Sidebar />}
         inspectionPanel={
           <InspectionPanel
-            title={isDashboard ? "Point Inspection" : "Inspector"}
+            title="Point Inspection"
             subtitle={inspectionSubtitle}
             open={inspectorOpen}
             onClose={() => setInspectorOpen(false)}
           >
-            {isDashboard ? (
+            {selectedPoint ? (
               <PointInspection
                 selectedPoint={selectedPoint}
                 date={date}
@@ -124,6 +127,8 @@ function AppShellContent({ children }) {
                 onClose={clearSelection}
                 reconstruction={pointInspection}
                 pointStatus={pointStatus}
+                modelInfo={modelInfoData}
+                variableMode={variableMode}
               />
             ) : (
               <Panel emphasis="raised" icon={Compass} title="Nothing selected">
@@ -147,7 +152,33 @@ function AppShellContent({ children }) {
           )
         }
       >
-        <MainContent id={MAIN_CONTENT_ID}>{children}</MainContent>
+        <MainContent id={MAIN_CONTENT_ID}>
+          <div className="sticky top-0 z-raised border-b border-border-subtle bg-surface-base/95 px-3 py-2 backdrop-blur sm:px-5">
+            <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-4 gap-y-2 text-[11px]">
+              <DateControls className="flex items-center gap-2 [&>p]:mb-0" availableDates={availableDates ?? []} date={date} status={datesStatus} canStepPrev={canStepPrev} canStepNext={canStepNext} onStepDate={stepDate} onSelectDate={selectDate} message={datesError?.message} onRetry={retryDates} />
+              <Link href="/dashboard" title="Select location on the ocean map" className="min-w-0 text-text-muted hover:text-accent-300">
+                LOCATION <span className="ml-1 font-mono text-text-primary">{selectedPoint ? `${formatLat(selectedPoint.lat)} · ${formatLon(selectedPoint.lon)}` : "Not selected"}</span>
+              </Link>
+              <label className="flex items-center gap-2 text-text-muted">DEPTH
+                <select aria-label="Global scientific depth" value={depth ?? ""} onChange={(event) => selectDepth(Number(event.target.value))} disabled={depthsStatus !== "success"} className="rounded border border-border-subtle bg-surface-900 px-2 py-1.5 font-mono text-text-primary">
+                  {depthsStatus !== "success" || depth == null ? <option value="">{depthsStatus === "loading" ? "Loading" : depthsStatus === "empty" ? "No depths" : "Unavailable"}</option> : null}
+                  {(availableDepths ?? []).map((item) => <option key={item} value={item}>{formatDepth(item)}</option>)}
+                </select>
+              </label>
+              {depthsStatus === "error" ? <button type="button" onClick={retryDepths} className="text-[10px] text-accent-300 underline" title={depthsError?.message}>Retry depths</button> : null}
+              <div className="ml-auto flex items-center gap-1" role="group" aria-label="Global scientific variable mode">
+                <span className="mr-1 text-text-muted">MODE</span>
+                {["temperature", "anomaly"].map((mode) => <button key={mode} type="button" aria-pressed={variableMode === mode} onClick={() => setVariableMode(mode)} className={`rounded px-2 py-1.5 font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-300 ${variableMode === mode ? "bg-accent-900/60 text-accent-200" : "text-text-muted hover:text-text-primary"}`}>{mode === "temperature" ? "MODEL OUTPUT" : "ANOMALY"}</button>)}
+              </div>
+            </div>
+          </div>
+          <DemoControls />
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div key={pathname} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -2 }} transition={{ duration: 0.14, ease: "easeOut" }} className="min-h-full">
+              {children}
+            </motion.div>
+          </AnimatePresence>
+        </MainContent>
       </AppShell>
     </>
   );

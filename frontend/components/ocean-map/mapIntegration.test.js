@@ -10,7 +10,6 @@ import {
   isRequestableDepth,
   planRequestBounds,
   rememberInCache,
-  subtractGrids,
 } from "./useOceanMapLayer";
 import { OCEAN_DOMAIN, toGridSelection } from "@/lib/oceanDomain";
 
@@ -109,12 +108,6 @@ describe("toGridSelection — click → grid cell", () => {
     expect(toGridSelection(NaN, 60)).toBeNull();
     expect(toGridSelection(10, Infinity)).toBeNull();
     expect(toGridSelection(undefined, undefined)).toBeNull();
-  });
-});
-
-describe("subtractGrids — missing values are never invented", () => {
-  it("yields null for a cell missing in either grid", () => {
-    expect(subtractGrids([[1, null], [3, 4]], [[0.5, 1], [null, 1]])).toEqual([[0.5, null], [null, 3]]);
   });
 });
 

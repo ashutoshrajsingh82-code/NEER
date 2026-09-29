@@ -1,12 +1,7 @@
-import RoutePlaceholder from "../_components/RoutePlaceholder";
+import VerticalProfileClient from "./VerticalProfileClient";
 
 export const metadata = { title: "Vertical Profile — NEER" };
 
 export default function VerticalProfilePage() {
-  return (
-    <RoutePlaceholder
-      title="Vertical Profile"
-      description="Depth-resolved profile views for a selected location and time."
-    />
-  );
+  return <VerticalProfileClient />;
 }

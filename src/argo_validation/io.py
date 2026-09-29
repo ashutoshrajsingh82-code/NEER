@@ -99,9 +99,14 @@ def load_argo_csv(path: PathLike) -> ArgoProfileSet:
     if not path.exists():
         raise FileNotFoundError(path)
 
-    with open(path, "r", encoding="utf-8", newline="") as f:
-        lines = [line for line in f if not line.lstrip().startswith("#")]
-    reader = csv.DictReader(lines)
+    def non_comment_lines():
+        # Keep this streaming: real GDAC-derived CSVs can contain millions of
+        # level rows. Materializing every 600+ MiB line before parsing caused
+        # large, unnecessary memory spikes and left the Evaluation page loading.
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            yield from (line for line in f if not line.lstrip().startswith("#"))
+
+    reader = csv.DictReader(non_comment_lines())
     if reader.fieldnames is None:
         raise SchemaError(f"{path}: empty CSV")
 

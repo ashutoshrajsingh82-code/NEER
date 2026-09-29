@@ -167,8 +167,29 @@ export function parseDatesPayload(raw) {
  */
 export function reconcileDate(dates, current) {
   if (!dates.length) return null;
-  if (current && dates.includes(current)) return current;
+  if (current && isDateInDataRange(current, dates)) return current;
   return dates[dates.length - 1];
+}
+
+/** Calendar-day bounds spanning the months that contain source timesteps. */
+export function selectableDateBounds(dates) {
+  if (!dates.length) return { min: null, max: null };
+  const first = dates[0].slice(0, 7);
+  const last = dates[dates.length - 1].slice(0, 7);
+  const [year, month] = last.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return { min: `${first}-01`, max: `${last}-${String(lastDay).padStart(2, "0")}` };
+}
+
+export function isDateInDataRange(date, dates) {
+  if (!isIsoDate(date) || !dates.length) return false;
+  const { min, max } = selectableDateBounds(dates);
+  return date >= min && date <= max;
+}
+
+function addCalendarDays(date, delta) {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + delta)).toISOString().slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -454,17 +475,16 @@ export function dateDepthReducer(state, action) {
 
     case "date/select": {
       const iso = toIsoDate(action.date);
-      // Only a date the backend actually listed can become the selection.
-      if (!iso || !state.dates.items.includes(iso) || iso === state.selectedDate) return state;
+      // Any calendar day within the dataset's first/last month is supported.
+      if (!iso || !isDateInDataRange(iso, state.dates.items) || iso === state.selectedDate) return state;
       return { ...state, selectedDate: iso };
     }
 
     case "date/step": {
       const { items } = state.dates;
-      const i = state.selectedDate ? items.indexOf(state.selectedDate) : -1;
-      if (i === -1) return state;
-      const next = items[i + Math.sign(action.delta)];
-      return next === undefined ? state : { ...state, selectedDate: next };
+      if (!state.selectedDate || !items.length) return state;
+      const next = addCalendarDays(state.selectedDate, Math.sign(action.delta));
+      return isDateInDataRange(next, items) ? { ...state, selectedDate: next } : state;
     }
 
     case "depth/select": {
@@ -490,8 +510,8 @@ export function dateDepthReducer(state, action) {
  */
 export function canStepDate(state, delta) {
   const { items } = state.dates;
-  const i = state.selectedDate ? items.indexOf(state.selectedDate) : -1;
-  return i !== -1 && items[i + Math.sign(delta)] !== undefined;
+  if (!state.selectedDate || !items.length) return false;
+  return isDateInDataRange(addCalendarDays(state.selectedDate, Math.sign(delta)), items);
 }
 
 /**

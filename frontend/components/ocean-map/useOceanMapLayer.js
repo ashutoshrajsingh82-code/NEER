@@ -17,18 +17,10 @@
 //
 // Variable -> backend support
 // ----------------------------
-// GET /reconstruct/grid (backend/app/routers/reconstruct.py,
-// GridReconstructionResponse in backend/app/schemas.py) returns only
-// `temperature` and an optional `climatology` — there is no grid endpoint
-// yet for salinity, currents, SSH/SLA, winds, subsurface temperature, or
-// uncertainty, and (same "no fake scientific data" rule OceanMap.js itself
-// already follows) nothing here invents a stand-in for those. `sst` reads
-// `temperature` directly. `anomaly` has no grid field at all — unlike GET
-// /reconstruct (the *point* endpoint), which returns anomaly precomputed —
-// so it's derived client-side as `temperature - climatology`, the same
-// subtraction the backend does for the point endpoint, and is only
-// available when the backend actually returned a `climatology` grid for
-// that date (it's nullable per the schema).
+// GET /reconstruct/grid returns aligned `temperature`, `climatology`, and
+// canonical `anomaly` fields. The model anomaly is pooled by depth; the
+// backend returns it on the same coordinate grid and masks cells without a
+// valid climatology. The frontend validates and consumes that field directly.
 //
 // Phase 35B wires this hook's `values`/`grid` into an actual on-map layer
 // (see TemperatureLayer.js) and adds `retry` below so a failed request can
@@ -55,6 +47,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { reconstructGrid } from "@/lib/api";
 import { useApiRequest } from "@/lib/useApiRequest";
 import { OCEAN_DOMAIN } from "@/lib/oceanDomain";
+import { validateGridAnomalyResponse } from "@/lib/anomaly";
 
 /** Estimated number of native-resolution cells a bounds box covers. */
 export function estimateCells({ latMin, latMax, lonMin, lonMax }) {
@@ -96,26 +89,6 @@ export function planRequestBounds(bounds) {
   return estimateCells(snapped) <= MAX_GRID_POINTS ? snapped : bounds;
 }
 
-/**
- * Element-wise subtraction of two matching-shape, arbitrarily-nested
- * (2D or 3D) number arrays — `temperature`/`climatology` are `(n_lat,
- * n_lon)` when the caller requested one depth, `(n_lat, n_lon, num_depths)`
- * when it requested every depth level.
- *
- * A cell that is missing (null/undefined/NaN) in EITHER grid yields `null`
- * — a missing climatology is never treated as 0 (that would report the full
- * temperature as an "anomaly") and a masked temperature never throws.
- * Callers (colorScale/legend/tooltip) already treat `null` as "no data".
- */
-export function subtractGrids(a, b) {
-  if (Array.isArray(a)) {
-    return a.map((item, i) => subtractGrids(item, Array.isArray(b) ? b[i] : undefined));
-  }
-  if (typeof a !== "number" || !Number.isFinite(a)) return null;
-  if (typeof b !== "number" || !Number.isFinite(b)) return null;
-  return a - b;
-}
-
 // ---------------------------------------------------------------------------
 // Phase 36B — date/depth-driven requests
 // ---------------------------------------------------------------------------
@@ -139,8 +112,11 @@ export function gridCacheKey({ date, depth, latMin, latMax, lonMin, lonMax }) {
 }
 
 /** True when a loaded field belongs to exactly the requested date and depth. */
-export function fieldContextMatches(context, { date, depth }) {
-  return Boolean(context) && context.date === String(date) && context.depth === depth;
+export function fieldContextMatches(context, { date, depth, bounds }) {
+  const coordinatesMatch = !bounds || Boolean(context?.bounds
+    && context.bounds.latMin <= bounds.latMin && context.bounds.latMax >= bounds.latMax
+    && context.bounds.lonMin <= bounds.lonMin && context.bounds.lonMax >= bounds.lonMax);
+  return Boolean(context) && context.date === String(date) && context.depth === depth && coordinatesMatch;
 }
 
 /** Inserts into an insertion-ordered Map used as a small LRU. */
@@ -227,7 +203,12 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
     }
     const response = await reconstructGrid(params);
     if (response && typeof response === "object") {
-      contextRef.current.set(response, { date: String(params.date), depth: params.depth });
+      const validation = validateGridAnomalyResponse(response, params);
+      if (!validation.ok) throw new Error(validation.reason);
+      contextRef.current.set(response, {
+        date: String(params.date), depth: params.depth,
+        bounds: { latMin: params.latMin, latMax: params.latMax, lonMin: params.lonMin, lonMax: params.lonMax },
+      });
       rememberInCache(cacheRef.current, key, response);
     }
     return response;
@@ -301,7 +282,7 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
   //     date's/depth's temperatures under the newly selected label would be
   //     wrong, and the error state explains why the map is blank.
   const fieldContext = data ? (contextRef.current.get(data) ?? null) : null;
-  const isStale = Boolean(data) && !fieldContextMatches(fieldContext, { date, depth });
+  const isStale = Boolean(data) && !fieldContextMatches(fieldContext, { date, depth, bounds: { latMin, latMax, lonMin, lonMax } });
   const keepPreviousField = isStale && canFetch && !isError;
   const fieldData = data && isSupported && (!isStale || keepPreviousField) ? data : null;
   const isUpdating = canFetch && (isLoading || (isStale && !isError));
@@ -310,9 +291,7 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
     const data = fieldData;
     if (!data || !isSupported) return null;
     if (fieldName === "temperature") return data.temperature;
-    if (fieldName === "anomaly") {
-      return data.climatology ? subtractGrids(data.temperature, data.climatology) : null;
-    }
+    if (fieldName === "anomaly") return data.anomaly ?? null;
     return null;
   }, [fieldData, isSupported, fieldName]);
 
@@ -330,7 +309,12 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
 
   const anomalyValues = useMemo(() => {
     if (!fieldData || !isSupported) return null;
-    return fieldData.climatology ? subtractGrids(fieldData.temperature, fieldData.climatology) : null;
+    return fieldData.anomaly ?? null;
+  }, [fieldData, isSupported]);
+
+  const climatologyValues = useMemo(() => {
+    if (!fieldData || !isSupported) return null;
+    return fieldData.climatology ?? null;
   }, [fieldData, isSupported]);
 
   // Memoized: a new object identity per render would defeat the memoization
@@ -364,6 +348,7 @@ export function useOceanMapLayer({ variable, date, depth, bounds }) {
     values,
     temperatureValues,
     anomalyValues,
+    climatologyValues,
     grid,
     estimatedCells,
     tooLargeForCellLimit,

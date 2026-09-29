@@ -47,6 +47,7 @@ meaningful `503`, never a demo substitution.
 from __future__ import annotations
 
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -86,6 +87,18 @@ from src.inference.service import InferenceService
 #: parameter the way the CLI script has one.
 _ARGO_CSV_NAME = "argo_profiles.csv"
 _ARGO_NC_DIRNAME = "argo_nc"
+
+
+@lru_cache(maxsize=2)
+def _load_argo_file_cached(path: str, modified_ns: int, size: int) -> ArgoProfileSet:
+    """Reuse parsed profile arrays while the source file is unchanged.
+
+    Evaluation pages may be opened repeatedly during a demo. Re-parsing a
+    multi-million-row ARGO CSV on every navigation made the page look empty
+    for a long time even after its first successful load.
+    """
+    del modified_ns, size  # Included in the cache key for automatic invalidation.
+    return load_argo(Path(path))
 
 
 # --------------------------------------------------------------------------
@@ -192,6 +205,71 @@ def metrics(repository: NEERRepository, *, split: str) -> Dict[str, Any]:
     }
 
 
+def comparison_metrics(repository: NEERRepository, *, split: str) -> Dict[str, Any]:
+    """Depth-wise comparison using the same held-out targets and baseline
+    evaluation interface as scripts/run_evaluation.py.
+
+    Optional baseline dependencies are represented as unavailable models;
+    their results are never synthesized. NEER metrics reuse the repository
+    evaluation path above.
+    """
+    if split not in SPLIT_NAMES:
+        raise InvalidParameterError(f"split must be one of {list(SPLIT_NAMES)}, got {split!r}")
+    bundle = repository.require_bundle()
+    if bundle.targets is None or bundle.target_mask is None:
+        raise DataUnavailableError("the loaded dataset has no targets; evaluation metrics are unavailable")
+    try:
+        pooled = pool_tensor_bundle(bundle, source_tensors_path=repository.tensor_path)
+    except (KeyError, ValueError) as exc:
+        raise DataUnavailableError(str(exc)) from exc
+    if pooled[split].n_samples == 0:
+        raise DataUnavailableError(f"the '{split}' split has no samples to score")
+
+    from src.models.baselines import ClimatologyBaseline, LightGBMBaseline, RidgeBaseline, is_lightgbm_available
+    from src.evaluation.interface import evaluate_baseline
+
+    results: Dict[str, Any] = {"neer": None, "climatology": None, "ridge": None, "lightgbm": None}
+    errors: Dict[str, str] = {}
+    try:
+        neer = metrics(repository, split=split)
+        results["neer"] = neer["metrics"]
+    except ModelUnavailableError as exc:
+        errors["neer"] = str(exc)
+    baselines = [("climatology", ClimatologyBaseline)]
+    try:
+        baselines.append(("ridge", RidgeBaseline))
+    except ImportError:
+        errors["ridge"] = "Required scikit-learn dependency is unavailable."
+    if is_lightgbm_available():
+        baselines.append(("lightgbm", LightGBMBaseline))
+    else:
+        errors["lightgbm"] = "Optional LightGBM dependency is unavailable."
+    for name, model_class in baselines:
+        try:
+            report = evaluate_baseline(model_class(), pooled)
+            results[name] = report.metrics[split].to_dict()
+        except MissingDependencyError as exc:
+            errors[name] = str(exc)
+        except (ValueError, RuntimeError) as exc:
+            errors[name] = f"Evaluation unavailable: {exc}"
+    return {
+        "phase": 25,
+        "split": split,
+        "is_synthetic": bool(bundle.is_synthetic),
+        "data_mode": str(bundle.attrs.get("data_mode", "UNKNOWN")),
+        "disclaimer": bundle.attrs.get("disclaimer"),
+        "source_tensors_path": str(repository.tensor_path),
+        "checkpoint": str(repository.checkpoint_path) if repository.checkpoint_path else None,
+        "n_samples": pooled[split].n_samples,
+        "depths": pooled[split].depth_names,
+        "target_names": list(bundle.target_names),
+        "units": bundle.attrs.get("target_units"),
+        "models": results,
+        "unavailable": errors,
+        "aggregation": "Depth-wise metrics over the selected split; overall metrics pool valid targets across depths.",
+    }
+
+
 # --------------------------------------------------------------------------
 # /evaluation/argo
 # --------------------------------------------------------------------------
@@ -276,6 +354,9 @@ def _real_argo_profiles(repository: NEERRepository) -> ArgoProfileSet:
             "real ARGO data there"
         )
     try:
+        if source.is_file():
+            stat = source.stat()
+            return _load_argo_file_cached(str(source.resolve()), stat.st_mtime_ns, stat.st_size)
         return load_argo(source)
     except (LoaderError, OSError) as exc:
         raise ArgoDataUnavailableError(f"could not load ARGO data from {source}: {exc}") from exc

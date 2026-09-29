@@ -41,7 +41,7 @@ export function formatDate(date) {
  * @returns {string} "--" when `value` isn't a finite number.
  */
 export function formatSigned(value, digits = 2) {
-  if (typeof value !== "number" || Number.isNaN(value)) return "--";
+  if (typeof value !== "number" || !Number.isFinite(value)) return "--";
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(digits)}`;
 }

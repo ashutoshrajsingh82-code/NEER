@@ -17,7 +17,7 @@ export default function MainContent({ id, children, className, ...props }) {
       // move focus here directly, even though <main> isn't natively focusable.
       tabIndex={-1}
       className={cn(
-        "flex-1 overflow-y-auto bg-grid-subtle bg-grid px-6 py-6 focus:outline-none",
+        "min-w-0 flex-1 overflow-y-auto bg-grid-subtle bg-grid px-3 py-4 focus:outline-none sm:px-6 sm:py-6",
         className
       )}
       {...props}

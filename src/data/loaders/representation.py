@@ -371,7 +371,17 @@ class OceanDataset:
             data_vars[name] = (variable.dims, variable.values, attrs)
 
         coords = {name: self.coords[name] for name in self.coord_names}
-        return xr.Dataset(data_vars=data_vars, coords=coords, attrs=dict(self.attrs))
+        dataset = xr.Dataset(data_vars=data_vars, coords=coords, attrs=dict(self.attrs))
+        coordinate_attrs = {
+            "lat": {"standard_name": "latitude", "long_name": "latitude", "units": "degrees_north"},
+            "lon": {"standard_name": "longitude", "long_name": "longitude", "units": "degrees_east"},
+            "depth": {"standard_name": "depth", "long_name": "sea water depth", "units": "m", "positive": "down", "axis": "Z"},
+            "time": {"standard_name": "time", "axis": "T"},
+        }
+        for name, attrs in coordinate_attrs.items():
+            if name in dataset.coords:
+                dataset[name].attrs.update(attrs)
+        return dataset
 
     @classmethod
     def from_xarray(

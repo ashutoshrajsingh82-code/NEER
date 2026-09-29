@@ -96,6 +96,7 @@ def _grid_response(
         lat=result_dict["lat"],
         lon=result_dict["lon"],
         temperature=result_dict["temperature"],
+        anomaly=result_dict["anomaly"],
         climatology=result_dict["climatology"],
         data_mode=result_dict["data_mode"],
         latency_ms=result_dict["latency_ms"],

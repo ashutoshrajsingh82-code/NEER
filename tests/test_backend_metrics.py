@@ -102,6 +102,32 @@ def test_metrics_values_are_actual_numbers_not_placeholders(client_metrics):
     assert overall["mae"] >= 0.0
 
 
+def test_comparison_metrics_uses_shared_depthwise_evaluation(client_metrics):
+    response = client_metrics.get("/evaluation/metrics", params={"split": "test"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["split"] == "test"
+    assert len(data["depths"]) == N_DEPTHS
+    assert set(data["models"]) == {"neer", "climatology", "ridge", "lightgbm"}
+    assert data["models"]["neer"]["overall"]["n"] > 0
+    assert data["models"]["neer"]["per_depth"]
+    assert data["is_synthetic"] is True  # fixture source is explicitly synthetic
+
+
+def test_comparison_metrics_rejects_unknown_split(client_metrics):
+    response = client_metrics.get("/evaluation/metrics", params={"split": "invented"})
+    assert response.status_code == 400
+
+
+def test_comparison_metrics_keeps_available_baselines_when_neer_is_missing(client_metrics_no_model):
+    response = client_metrics_no_model.get("/evaluation/metrics", params={"split": "test"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["models"]["neer"] is None
+    assert "neer" in data["unavailable"]
+    assert data["models"]["climatology"] is not None
+
+
 # -- invalid split name -> 400 -------------------------------------------
 
 

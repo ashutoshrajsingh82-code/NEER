@@ -43,9 +43,8 @@
 import { Panel } from "@/components/ui";
 import OceanMapSection from "./_components/OceanMapSection";
 import MissionHeader from "./_components/MissionHeader";
-import SystemStatusPanel from "./_components/SystemStatusPanel";
+import DashboardRuntimePanel from "./_components/DashboardRuntimePanel";
 import DataContextSection from "./_components/DataContextSection";
-import ModelContextPanel from "./_components/ModelContextPanel";
 import { MapFieldStatusProvider } from "./_components/MapFieldStatusContext";
 
 export const metadata = { title: "Dashboard — NEER" };
@@ -57,8 +56,7 @@ export default function DashboardPage() {
         <MissionHeader />
 
         <Panel emphasis="base" bodyClassName="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-          <SystemStatusPanel state="operational" detail="All subsystems nominal" />
-          <ModelContextPanel version="v1.3.0" updatedAt="12 Mar 2024" className="sm:border-l sm:border-border-subtle sm:pl-6" />
+          <DashboardRuntimePanel />
         </Panel>
 
         {/* Phase 36B: date/depth controls — calendar, previous/next, depth

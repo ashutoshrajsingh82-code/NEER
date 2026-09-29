@@ -1,12 +1,7 @@
-import RoutePlaceholder from "../_components/RoutePlaceholder";
+import DataQualityClient from "./DataQualityClient";
 
 export const metadata = { title: "Data Quality — NEER" };
 
 export default function DataQualityPage() {
-  return (
-    <RoutePlaceholder
-      title="Data Quality"
-      description="Data-quality checks and flags across ingested observations."
-    />
-  );
+  return <DataQualityClient />;
 }

@@ -17,7 +17,6 @@ import LayerToggle from "./LayerToggle";
 import MapControls from "./MapControls";
 import MapLegend, { LEGEND_STATE, deriveLegendState } from "./MapLegend";
 import TemperatureLegend, { legendDigits } from "./TemperatureLegend";
-import { subtractGrids } from "./useOceanMapLayer";
 
 const html = (el) => renderToStaticMarkup(el);
 // Strip tags so assertions read the text a user would see.
@@ -285,22 +284,3 @@ describe("MapControls", () => {
   });
 });
 
-describe("subtractGrids — anomaly derivation never fabricates values", () => {
-  it("subtracts matching cells", () => {
-    expect(subtractGrids([[28, 29]], [[27, 27.5]])).toEqual([[1, 1.5]]);
-  });
-
-  it("a missing climatology cell yields null, NOT the raw temperature", () => {
-    expect(subtractGrids([[28, 29]], [[27, null]])).toEqual([[1, null]]);
-  });
-
-  it("a masked temperature cell yields null and does not throw", () => {
-    expect(subtractGrids([[null, 29]], [[27, 27]])).toEqual([[null, 2]]);
-    expect(subtractGrids([[NaN]], [[1]])).toEqual([[null]]);
-  });
-
-  it("handles 3D (multi-depth) grids and a shorter climatology safely", () => {
-    expect(subtractGrids([[[20, 19]]], [[[18, 18]]])).toEqual([[[2, 1]]]);
-    expect(subtractGrids([[1], [2]], [[1]])).toEqual([[0], [null]]);
-  });
-});

@@ -220,10 +220,10 @@ def test_enabled_default_config_end_to_end_on_the_real_neer_grid():
     with torch.no_grad():
         out = model(x)
         embedding = model.get_embedding(x)
-        profile = model.predict_profile(x, torch.full((15,), 15.0))
+        profile = model.predict_profile(x)
     assert out.shape == (1, 15) and torch.isfinite(out).all()
     assert embedding.shape == (1, 256) and torch.isfinite(embedding).all()
-    assert torch.allclose(profile, out + 15.0)
+    assert torch.allclose(profile, out)
     assert model.depths == DEFAULT_DEPTHS
 
 
@@ -467,12 +467,11 @@ def test_both_configurations_forward_and_embedding_shapes(use_gnn):
     assert model.depths == DEPTHS
 
 
-def test_both_configurations_predict_profile_adds_the_climatology(use_gnn):
+def test_both_configurations_predict_profile_returns_model_target(use_gnn):
     model = _small_model(use_gnn).eval()
     x = torch.randn(2, IN_CH, 12, 12)
-    climatology = torch.tensor([10.0, 8.0, 4.0, 2.0])
     with torch.no_grad():
-        assert torch.allclose(model.predict_profile(x, climatology), model(x) + climatology)
+        assert torch.allclose(model.predict_profile(x), model(x))
 
 
 def test_both_configurations_are_deterministic_in_eval_mode(use_gnn):

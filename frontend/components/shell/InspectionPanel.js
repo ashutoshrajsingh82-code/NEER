@@ -71,9 +71,10 @@ export default function InspectionPanel({
   // something) even if a caller doesn't wire up `open`/`onClose` themselves.
   const [internalOpen, setInternalOpen] = useState(true);
   const isControlled = open !== undefined;
-  const isOpen = isControlled ? open : internalOpen;
+  const isOpen = isControlled ? Boolean(open || inspectionOpen) : internalOpen;
 
   function handleClose() {
+    setInspectionOpen(false);
     onClose?.();
     if (!isControlled) setInternalOpen(false);
   }

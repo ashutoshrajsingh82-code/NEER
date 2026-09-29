@@ -40,6 +40,7 @@ def test_reconstruct_grid_all_depths_response_schema(client):
     assert len(data["temperature"]) == len(data["lat"])
     assert len(data["temperature"][0]) == len(data["lon"])
     assert len(data["temperature"][0][0]) == 15
+    assert len(data["anomaly"][0][0]) == 15
 
 
 def test_reconstruct_grid_single_depth_response_shape(client):
@@ -50,7 +51,8 @@ def test_reconstruct_grid_single_depth_response_shape(client):
     # (n_lat, n_lon) when a single depth is given.
     assert len(data["temperature"]) == len(data["lat"])
     assert isinstance(data["temperature"][0], list)
-    assert isinstance(data["temperature"][0][0], (int, float))
+    assert isinstance(data["temperature"][0][0], float)
+    assert data["anomaly"][0][0] is None
 
 
 def test_reconstruct_grid_returned_lat_lon_are_within_the_requested_region(client):

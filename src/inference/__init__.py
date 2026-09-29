@@ -24,7 +24,7 @@ Three request shapes, one shared forward pass
 ------------------------------------------------
 `NEERModel.forward` always does the same thing — one surface-field
 tensor in, one pooled `(embed_dim,)` embedding and one `(num_depths,)`
-anomaly profile out (see `src/models/neer_model.py`; the pipeline is
+normalized absolute-temperature target profile out (see `src/models/neer_model.py`; the pipeline is
 domain-pooled, not per-pixel — `src/argo_validation/predictions.py`
 documents the same limitation this service inherits). `predict_point`,
 `predict_profile` and `predict_grid` are three *views* onto that one
@@ -32,10 +32,9 @@ result, not three different models:
 
 * `predict_point`   — the profile, sliced to the nearest requested depth.
 * `predict_profile` — the full depth profile at one location.
-* `predict_grid`    — the same domain-pooled anomaly combined with a
-  per-cell climatology across many locations, so the returned field
-  still varies spatially through its climatological term even though
-  the model itself predicts one anomaly per timestep.
+* `predict_grid`    — the domain-pooled temperature is replicated across
+  coordinates; climatology varies by location and anomaly is derived
+  by subtracting that local climatology.
 """
 
 from src.inference.service import InferenceService, PredictionResult

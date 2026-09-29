@@ -35,7 +35,8 @@
 // -----------------------------------------------------------------------------
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, reconstruct } from "@/lib/api";
+import { ApiError, demoContext as fetchDemoContext, runReconstruction } from "@/lib/api";
+import { snapToGrid } from "@/lib/oceanDomain";
 import { useApiRequest } from "@/lib/useApiRequest";
 import { classifyPointLocation, isQueryablePoint } from "@/lib/pointClassification";
 import { isOnLand } from "@/components/ocean-map/landmask";
@@ -48,6 +49,10 @@ const DEFAULT_DATA_MODE = "reconstructed";
 /** Settle time for a changed point/date/depth before GET /reconstruct is re-issued (see the effect below). */
 const POINT_REQUEST_DEBOUNCE_MS = 150;
 
+function reconstructInspectionPoint({ lat, lon, date, depth }) {
+  return runReconstruction({ date, depth, latitude: lat, longitude: lon });
+}
+
 /**
  * @param {"reconstructed"|"observed"|"blended"} dataMode
  */
@@ -57,12 +62,51 @@ export function PointInspectionProvider({ children, dataMode = DEFAULT_DATA_MODE
     selectedDepth: depth,
     selectDate,
     selectDepth,
-    datesStatus,
     datesError,
     retryDates,
+    modelInfoData,
+    availableDates,
+    availableDepths,
+    datesStatus,
+    depthsStatus,
   } = useDateDepthContext();
 
   const [selectedPoint, setSelectedPoint] = useState(null);
+  const [variableMode, setVariableModeState] = useState("temperature");
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoStatus, setDemoStatus] = useState({ state: "idle", error: null, context: null });
+  const defaultPointInitialized = useRef(false);
+  const setVariableMode = useCallback((mode) => {
+    if (mode === "temperature" || mode === "anomaly") setVariableModeState(mode);
+  }, []);
+  const activateDemoMode = useCallback(async () => {
+    setDemoStatus({ state: "loading", error: null, context: null });
+    setDemoMode(false);
+    try {
+      const context = await fetchDemoContext();
+      if (context?.available !== true || context?.variable_mode !== "temperature" || context?.depth !== 100) {
+        throw new Error("The backend returned an incomplete demonstration context.");
+      }
+      if (!Number.isFinite(context.latitude) || !Number.isFinite(context.longitude)) {
+        throw new Error("The backend demonstration location is invalid.");
+      }
+      if (datesStatus !== "success" || !availableDates.includes(context.date) || depthsStatus !== "success" || !availableDepths.includes(context.depth)) {
+        throw new Error("The demonstration date or 100 m depth is not available in the shared backend metadata.");
+      }
+      const locationStatus = classifyPointLocation(context.latitude, context.longitude, isOnLand);
+      if (!isQueryablePoint(locationStatus)) throw new Error("The backend demonstration location is not a valid ocean point.");
+      selectDate(context.date);
+      selectDepth(context.depth);
+      setSelectedPoint({ lat: context.latitude, lon: context.longitude });
+      setVariableModeState("temperature");
+      setDemoMode(true);
+      setDemoStatus({ state: "ready", error: null, context });
+      return true;
+    } catch (error) {
+      setDemoStatus({ state: "error", error: error?.message || "Demo mode unavailable.", context: null });
+      return false;
+    }
+  }, [selectDate, selectDepth, availableDates, availableDepths, datesStatus, depthsStatus]);
 
   const {
     data: pointData,
@@ -73,7 +117,14 @@ export function PointInspectionProvider({ children, dataMode = DEFAULT_DATA_MODE
     isError: pointIsError,
     run: runReconstruct,
     reset: resetReconstruct,
-  } = useApiRequest(reconstruct);
+  } = useApiRequest(reconstructInspectionPoint);
+  const {
+    data: surfaceData,
+    error: surfaceError,
+    isLoading: surfaceLoading,
+    run: runSurface,
+    reset: resetSurface,
+  } = useApiRequest(reconstructInspectionPoint);
 
   // Single source of truth for "is this selection ocean, land, or outside
   // the NEER domain" (lib/pointClassification.js). `null` when nothing is
@@ -85,6 +136,30 @@ export function PointInspectionProvider({ children, dataMode = DEFAULT_DATA_MODE
 
   const selectPoint = useCallback((point) => setSelectedPoint(point ?? null), []);
   const clearSelection = useCallback(() => setSelectedPoint(null), []);
+
+  // Seed a usable first view for routes opened directly, without enabling
+  // SIH demo mode. The demo endpoint provides its ocean grid cell when
+  // available; a known in-domain ocean point is the fallback.
+  useEffect(() => {
+    if (selectedPoint || defaultPointInitialized.current || datesStatus !== "success" || depthsStatus !== "success" || !date || depth == null) return undefined;
+    let cancelled = false;
+    const chooseDefault = (context) => {
+      if (cancelled || defaultPointInitialized.current || selectedPoint) return;
+      const candidates = [
+        ...(Number.isFinite(context?.latitude) && Number.isFinite(context?.longitude)
+          ? [{ lat: context.latitude, lon: context.longitude }]
+          : []),
+        { lat: 15.5, lon: 72.75 },
+      ];
+      const point = candidates
+        .map(({ lat, lon }) => snapToGrid(lat, lon))
+        .find(({ lat, lon }) => isQueryablePoint(classifyPointLocation(lat, lon, isOnLand)));
+      defaultPointInitialized.current = true;
+      if (point) setSelectedPoint(point);
+    };
+    fetchDemoContext().then(chooseDefault).catch(() => chooseDefault(null));
+    return () => { cancelled = true; };
+  }, [selectedPoint, datesStatus, depthsStatus, date, depth]);
 
   // The complete inputs of one reconstruct() call, or null when there's
   // nothing valid to ask for: no point, a land/outside-domain point (GET
@@ -109,6 +184,7 @@ export function PointInspectionProvider({ children, dataMode = DEFAULT_DATA_MODE
   useEffect(() => {
     if (requestKey === null) {
       resetReconstruct();
+      resetSurface();
       setRequestedKey(null);
       hasRequestedRef.current = false;
       return undefined;
@@ -121,6 +197,9 @@ export function PointInspectionProvider({ children, dataMode = DEFAULT_DATA_MODE
           // Swallowed on purpose — pointError/pointIsError capture the failure
           // for consumers to render their own error states.
         });
+        if (depth !== 0 && !(surfaceData?.date === date && surfaceData?.lat === selectedPoint.lat && surfaceData?.lon === selectedPoint.lon)) {
+          runSurface({ lat: selectedPoint.lat, lon: selectedPoint.lon, date, depth: 0 }).catch(() => {});
+        }
       },
       hasRequestedRef.current ? POINT_REQUEST_DEBOUNCE_MS : 0
     );
@@ -168,6 +247,14 @@ export function PointInspectionProvider({ children, dataMode = DEFAULT_DATA_MODE
       // loading, and a consumer reading `data` directly must never see
       // another point's/date's/depth's value.
       data: pointSuccess && !isPending ? pointData : null,
+      surfaceTemperature:
+        !isPending && depth === 0 && pointSuccess
+          ? pointData?.temperature
+          : !isPending && depth !== 0 && surfaceData?.date === date && surfaceData?.lat === selectedPoint?.lat && surfaceData?.lon === selectedPoint?.lon
+            ? surfaceData.temperature
+            : null,
+      surfaceIsLoading: depth !== 0 && (surfaceLoading || isPending),
+      surfaceError: depth !== 0 && !isPending ? surfaceError : null,
       error: pointIsError && !isPending ? pointError : null,
       isLoading: pointLoading || isPending,
       isIdle: pointIdle && !isPending,
@@ -178,11 +265,18 @@ export function PointInspectionProvider({ children, dataMode = DEFAULT_DATA_MODE
     };
   }, [
     awaitingSelection,
+    date,
+    depth,
+    selectedPoint?.lat,
+    selectedPoint?.lon,
     selectionError,
     selectionUnavailable,
     retryDates,
     isPending,
     pointData,
+    surfaceData,
+    surfaceLoading,
+    surfaceError,
     pointError,
     pointLoading,
     pointIdle,
@@ -202,8 +296,18 @@ export function PointInspectionProvider({ children, dataMode = DEFAULT_DATA_MODE
       setDepth: selectDepth,
       pointInspection,
       pointStatus,
+      modelInfoData,
+      variableMode,
+      setVariableMode,
+      demoMode,
+      demoStatus,
+      activateDemoMode,
+      deactivateDemoMode: () => {
+        setDemoMode(false);
+        setDemoStatus({ state: "idle", error: null, context: null });
+      },
     }),
-    [selectedPoint, selectPoint, clearSelection, dataMode, date, selectDate, depth, selectDepth, pointInspection, pointStatus]
+    [selectedPoint, selectPoint, clearSelection, dataMode, date, selectDate, depth, selectDepth, pointInspection, pointStatus, modelInfoData, variableMode, setVariableMode, demoMode, demoStatus, activateDemoMode]
   );
 
   return <PointInspectionContext.Provider value={value}>{children}</PointInspectionContext.Provider>;
@@ -229,6 +333,11 @@ export function PointInspectionProvider({ children, dataMode = DEFAULT_DATA_MODE
  *     retry: () => void,
  *   },
  *   pointStatus: "ocean"|"land"|"outside_domain"|null,
+ *   variableMode: "temperature"|"anomaly",
+ *   setVariableMode: (mode: "temperature"|"anomaly") => void,
+ *   demoMode: boolean,
+ *   demoStatus: {state: "idle"|"loading"|"ready"|"error", error: string|null},
+ *   activateDemoMode: () => Promise<boolean>,
  * }}
  */
 export function usePointInspection() {

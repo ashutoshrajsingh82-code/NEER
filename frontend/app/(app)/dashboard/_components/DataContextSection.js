@@ -27,6 +27,7 @@ import DepthControls from "./DepthControls";
 import { usePointInspection } from "../_context/PointInspectionContext";
 import { useDateDepthContext } from "../_context/DateDepthContext";
 import { useMapFieldStatus } from "./MapFieldStatusContext";
+import RunReconstruction from "./RunReconstruction";
 
 const MODE_CONFIG = {
   reconstructed: { label: "Reconstructed", variant: "accent" },
@@ -43,7 +44,7 @@ const DATES_MESSAGES = {
 };
 
 export default function DataContextSection({ className }) {
-  const { dataMode } = usePointInspection();
+  const { dataMode, selectedPoint } = usePointInspection();
   const {
     availableDates,
     selectedDate,
@@ -83,7 +84,8 @@ export default function DataContextSection({ className }) {
         : undefined;
 
   return (
-    <Panel emphasis="base" className={className} bodyClassName="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-0">
+    <Panel emphasis="base" className={className} bodyClassName="flex flex-col gap-5">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-0">
       {/* Data mode + the selection at a glance */}
       <div className="flex min-w-0 flex-col gap-3 lg:w-56 lg:shrink-0 lg:pr-6">
         <div className="flex items-center gap-3">
@@ -135,6 +137,8 @@ export default function DataContextSection({ className }) {
         busy={isUpdating}
         message={depthsMessage}
       />
+      </div>
+      <RunReconstruction date={selectedDate} depth={selectedDepth} availableDates={availableDates} availableDepths={availableDepths} selectedPoint={selectedPoint} />
     </Panel>
   );
 }

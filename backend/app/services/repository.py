@@ -28,6 +28,7 @@ or a prediction.
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -230,7 +231,9 @@ class NEERRepository:
         if not isinstance(raw, dict):
             return {}
         return {
-            "path": str(self.checkpoint_path),
+            "filename": self.checkpoint_path.name,
+            "version": raw.get("version"),
+            "model_version": raw.get("model_version"),
             "epoch": raw.get("epoch"),
             "val_loss": raw.get("val_loss"),
             "best_val_loss": raw.get("best_val_loss"),
@@ -265,7 +268,10 @@ class NEERRepository:
         model_component: Dict[str, Any] = {"status": "ok" if self.is_model_loaded else "unavailable"}
         if self.service is not None:
             model_component.update(
-                {"device": self.service.device, "checkpoint": str(self.checkpoint_path)}
+                {
+                    "device": self.service.device,
+                    "checkpoint": self.checkpoint_path.name if self.checkpoint_path else None,
+                }
             )
         elif "model" in self._errors:
             model_component["detail"] = self._errors["model"]
@@ -322,18 +328,69 @@ class NEERRepository:
             "is_synthetic": bool(self.bundle.is_synthetic),
         }
 
+    def demo_context(self) -> Dict[str, Any]:
+        """Return a reproducible selection only when the configured demo stack is live."""
+        if self.config is None or not self.config.demo.enabled:
+            raise DataUnavailableError("The backend is not running with the enabled demo configuration.")
+        if self.bundle is None or self.service is None or self.checkpoint_path is None:
+            raise DataUnavailableError("The demo requires a loaded demo dataset, model, and checkpoint.")
+        if not self.bundle.is_synthetic:
+            raise DataUnavailableError("The active dataset is not marked as the NEER synthetic demonstration dataset.")
+        dates = self.list_dates()["dates"]
+        if not dates:
+            raise DataUnavailableError("The loaded demo dataset has no available dates.")
+        demo_depth = 100.0
+        if demo_depth not in self.service.depths:
+            raise DataUnavailableError("The loaded model does not provide the required 100 m demonstration depth.")
+        if self.bundle.ocean_mask is None:
+            raise DataUnavailableError("The loaded demo tensor bundle has no ocean mask for choosing a valid location.")
+        rows, cols = np.where(np.asarray(self.bundle.ocean_mask, dtype=bool))
+        if rows.size == 0:
+            raise DataUnavailableError("The loaded demo tensor bundle contains no valid ocean grid locations.")
+        center_lat = (self.config.domain.lat_min + self.config.domain.lat_max) / 2
+        center_lon = (self.config.domain.lon_min + self.config.domain.lon_max) / 2
+        best = int(np.argmin((self.bundle.lat[rows] - center_lat) ** 2 + (self.bundle.lon[cols] - center_lon) ** 2))
+        return {
+            "available": True,
+            "environment": self.config.environment,
+            "dataset_mode": str(self.bundle.attrs.get("data_mode", "UNKNOWN")),
+            "dataset": self.bundle.attrs.get("dataset") or self.bundle.attrs.get("source") or "NEER demo tensor bundle",
+            "date": dates[-1],
+            "latitude": float(self.bundle.lat[rows[best]]),
+            "longitude": float(self.bundle.lon[cols[best]]),
+            "depth": demo_depth,
+            "variable_mode": "temperature",
+        }
+
     def _input_for_date(self, date: str) -> np.ndarray:
         if self.bundle is None:
             raise DataUnavailableError(self._errors.get("data", "no dataset is loaded"))
         index = self._date_index.get(date)
         if index is None:
-            nearest = sorted(self._date_strings, key=lambda d: abs(
-                np.datetime64(d) - np.datetime64(date)
-            ))[:5]
-            raise DateNotFoundError(
-                f"date '{date}' is not available in the loaded dataset",
-                extra={"nearest_available_dates": nearest},
-            )
+            if not self._date_strings:
+                raise DataUnavailableError("The loaded dataset has no dates.")
+            source_dates = np.asarray(self._date_strings, dtype="datetime64[D]")
+            requested = np.datetime64(date, "D")
+            # The UI offers every calendar day in months represented by this
+            # dataset. Between source timesteps, blend input fields by elapsed
+            # time; at the first/last month edges, hold the nearest sample.
+            first_month = source_dates[0].astype("datetime64[M]").astype("datetime64[D]")
+            last_month = source_dates[-1].astype("datetime64[M]")
+            after_last_month = (last_month + np.timedelta64(1, "M")).astype("datetime64[D]")
+            if requested < first_month or requested >= after_last_month:
+                nearest = sorted(self._date_strings, key=lambda d: abs(np.datetime64(d) - requested))[:5]
+                raise DateNotFoundError(
+                    f"date '{date}' is outside the months covered by the loaded dataset",
+                    extra={"nearest_available_dates": nearest},
+                )
+            right = int(np.searchsorted(source_dates, requested, side="right"))
+            if right == 0:
+                return self.bundle.inputs[0]
+            if right == len(source_dates):
+                return self.bundle.inputs[-1]
+            left = right - 1
+            elapsed = float((requested - source_dates[left]) / (source_dates[right] - source_dates[left]))
+            return (1.0 - elapsed) * self.bundle.inputs[left] + elapsed * self.bundle.inputs[right]
         return self.bundle.inputs[index]
 
     # -- coordinate/region validation --------------------------------------
@@ -477,45 +534,77 @@ class NEERRepository:
 
     # -- explainability (Phase 29B-2) ---------------------------------------
 
-    def explain(self, *, date: str, depth: Optional[float] = None) -> Dict[str, Any]:
-        """Real gradient-based explainability for one date (Requirement 1).
-
-        Runs an actual backward pass through the actual loaded model on
-        the actual input tensor for `date` (`src.explainability.gradients.
-        explain_point`) — never a fabricated/random/placeholder score.
-        `depth=None` explains the sum of every model depth level's
-        anomaly; a specific `depth` is snapped to the nearest model depth
-        level, same convention as `reconstruct_point`.
-        """
-        if depth is not None and depth < 0:
+    def explain(self, *, date: str, lat: float, lon: float, depth: float) -> Dict[str, Any]:
+        """Actual Integrated Gradients for one selected point prediction."""
+        if depth < 0:
             raise InvalidParameterError("depth must be non-negative")
+        self._validate_latlon(lat, lon)
         if self.bundle is None:
             raise DataUnavailableError(self._errors.get("data", "no dataset is loaded"))
         service = self._require_service()
         x = self._input_for_date(date)
-        channel_names = (
-            self.bundle.channel_names if self.bundle is not None else list(DEFAULT_TARGETS)
-        )
+        from src.data.preprocessing.channels import NEER_CHANNEL_ORDER, validate_channel_order
 
-        depth_index: Optional[int] = None
-        if depth is not None:
-            depth_index = int(np.argmin(np.abs(np.asarray(service.depths) - float(depth))))
+        try:
+            validate_channel_order(self.bundle.channel_names)
+        except ValueError as exc:
+            raise ExplainabilityFailedError(f"explainability input channels are invalid: {exc}") from exc
+
+        depth_matches = np.flatnonzero(np.isclose(np.asarray(service.depths), float(depth), rtol=0.0, atol=1e-6))
+        if depth_matches.size == 0:
+            raise InvalidParameterError(
+                f"depth={depth} is unsupported; choose one of {list(service.depths)}"
+            )
+        depth_index = int(depth_matches[0])
 
         from src.explainability.gradients import explain_point
 
         try:
+            output_center, output_scale = service.output_normalization(depth_index)
             result = explain_point(
                 service.model,
                 x,
-                channel_names=channel_names,
+                channel_names=NEER_CHANNEL_ORDER,
                 depths=service.depths,
                 depth_index=depth_index,
+                output_center=output_center,
+                output_scale=output_scale,
+                # Keep the interactive explanation responsive; the exact
+                # quadrature resolution is returned in the result payload.
+                steps=16,
             )
+            prediction = service.predict_point(x, lat=lat, lon=lon, date=date, depth=depth)
         except (ValueError, RuntimeError) as exc:
             raise ExplainabilityFailedError(f"explainability computation failed: {exc}") from exc
 
+        if prediction.temperature is not None and not np.isclose(
+            result["predicted_model_output"], prediction.temperature, rtol=1e-5, atol=1e-5
+        ):
+            raise ExplainabilityFailedError(
+                "Integrated Gradients target does not match the reconstructed temperature for the same request"
+            )
+        climatology_coordinates = (
+            self.climatology.nearest_coordinates(lat, lon)
+            if self.climatology is not None
+            else None
+        )
         result["date"] = str(date)
-        result["data_mode"] = service.data_mode
+        result.update(
+            {
+                "lat": float(lat),
+                "lon": float(lon),
+                "climatology_lat": None if climatology_coordinates is None else climatology_coordinates[0],
+                "climatology_lon": None if climatology_coordinates is None else climatology_coordinates[1],
+                "temperature": prediction.temperature,
+                "climatology": prediction.climatology,
+                "anomaly": prediction.anomaly,
+                "data_mode": service.data_mode,
+                "model_version": self._checkpoint_info.get("version") or self._checkpoint_info.get("model_version"),
+                "checkpoint_epoch": self._checkpoint_info.get("epoch"),
+                "target": "NEER decoder absolute subsurface temperature in degC; anomaly is derived by subtracting the available local climatology",
+                "feature_order": list(NEER_CHANNEL_ORDER[:7]),
+            }
+        )
         return result
 
     # -- data quality (Phase 29B-2) ------------------------------------------
@@ -546,6 +635,98 @@ class NEERRepository:
                 "spatial_coverage": bundle.spatial_coverage(),
                 "channels": bundle.channel_quality(),
                 "targets": bundle.target_quality(),
+            }
+            input_total = int(bundle.input_mask.size)
+            input_valid = int(np.asarray(bundle.input_mask, dtype=bool).sum())
+            report["input_cells"] = {
+                "n_cells": input_total,
+                "n_valid": input_valid,
+                "n_missing": input_total - input_valid,
+                "scope": "All input channels × available dates × grid cells.",
+            }
+            derived_context = {"time_sin", "time_cos", "lat_norm", "lon_norm"}
+            observed_indices = [
+                index for index, name in enumerate(bundle.channel_names)
+                if name not in derived_context
+            ]
+            observed_mask = np.asarray(bundle.input_mask[:, observed_indices], dtype=bool)
+            observed_total = int(observed_mask.size)
+            observed_valid = int(observed_mask.sum())
+            report["observed_input_cells"] = {
+                "n_cells": observed_total,
+                "n_valid": observed_valid,
+                "n_missing": observed_total - observed_valid,
+                "channels": [bundle.channel_names[index] for index in observed_indices],
+                "scope": "Physical input variables × available dates × grid cells; derived time/location context channels excluded.",
+            }
+            domain_mask = (
+                np.ones(bundle.grid_shape, dtype=bool)
+                if bundle.ocean_mask is None
+                else np.asarray(bundle.ocean_mask, dtype=bool)
+            )
+            observed_grid = observed_mask.any(axis=(0, 1)) if observed_indices else np.zeros(bundle.grid_shape, dtype=bool)
+            coverage_cells = np.where(domain_mask, observed_grid.astype(np.int8), -1)
+            report["coverage_grid"] = {
+                "lat": [float(value) for value in bundle.lat],
+                "lon": [float(value) for value in bundle.lon],
+                "cells": coverage_cells.tolist(),  # 1 valid, 0 missing, -1 outside known ocean mask
+                "valid_cells": int(np.logical_and(domain_mask, observed_grid).sum()),
+                "missing_cells": int(np.logical_and(domain_mask, ~observed_grid).sum()),
+                "outside_cells": int((~domain_mask).sum()) if bundle.ocean_mask is not None else None,
+                "scope": "A grid cell is valid when any input channel is observed on any available date.",
+            }
+
+            def axis_resolution(values: np.ndarray) -> Dict[str, Any]:
+                axis = np.asarray(values, dtype=float)
+                spacing = np.abs(np.diff(axis))
+                if not spacing.size or not np.isfinite(spacing).all():
+                    return {"uniform": None, "degrees": None}
+                uniform = bool(np.allclose(spacing, spacing[0], rtol=1e-7, atol=1e-10))
+                return {"uniform": uniform, "degrees": float(spacing[0]) if uniform else None}
+
+            report["grid_metadata"] = {
+                "lat_resolution": axis_resolution(bundle.lat),
+                "lon_resolution": axis_resolution(bundle.lon),
+                "lat_points": int(bundle.lat.size),
+                "lon_points": int(bundle.lon.size),
+                "target_depths": None if bundle.depth is None else [float(value) for value in bundle.depth],
+            }
+            preprocessing: Dict[str, Any] = {}
+            if self.metadata_path.is_file():
+                try:
+                    with self.metadata_path.open("r", encoding="utf-8") as handle:
+                        preprocessing = json.load(handle)
+                except (OSError, ValueError, TypeError):
+                    preprocessing = {}
+            source_metadata = preprocessing.get("source") if isinstance(preprocessing, dict) else None
+            source_metadata = source_metadata if isinstance(source_metadata, dict) else {}
+            variable_metadata = source_metadata.get("variables", [])
+            preprocessing_steps = preprocessing.get("steps", []) if isinstance(preprocessing, dict) else []
+            preprocessing_steps = preprocessing_steps if isinstance(preprocessing_steps, list) else []
+            report["provenance"] = {
+                "source": source_metadata.get("source") or bundle.attrs.get("source"),
+                "dataset_format": source_metadata.get("source_format"),
+                "dataset_identifier": source_metadata.get("dataset_id"),
+                "version": preprocessing.get("version") if isinstance(preprocessing, dict) else None,
+                "preprocessing_pipeline": preprocessing.get("pipeline") if isinstance(preprocessing, dict) else None,
+                "preprocessing_created_at": preprocessing.get("created_at") if isinstance(preprocessing, dict) else None,
+                "temporal_frequency": next((
+                    step.get("config", {}).get("frequency")
+                    for step in preprocessing_steps
+                    if isinstance(step, dict) and step.get("step") == "temporal_alignment"
+                ), None) if isinstance(preprocessing, dict) else None,
+                "variables": {
+                    item["name"]: {
+                        "units": item.get("units"),
+                        "description": item.get("description"),
+                        "dims": item.get("dims"),
+                        "shape": item.get("shape"),
+                        "missing_fraction": item.get("missing_fraction"),
+                        "n_missing": item.get("n_missing"),
+                    }
+                    for item in variable_metadata
+                    if isinstance(item, dict) and isinstance(item.get("name"), str)
+                } if isinstance(variable_metadata, list) else {},
             }
         except (ValueError, KeyError) as exc:
             raise DataQualityFailedError(f"data quality computation failed: {exc}") from exc
@@ -589,7 +770,19 @@ class NEERRepository:
             from src.data.loaders import save_netcdf
 
             dataset = _ocean_dataset_from_grid_result(result)
-            return save_netcdf(dataset, path)
+            model_version = self._checkpoint_info.get("model_version") or self._checkpoint_info.get("version")
+            if model_version is not None:
+                dataset.attrs["model_version"] = str(model_version)
+            if self.checkpoint_path is not None:
+                dataset.attrs["checkpoint"] = self.checkpoint_path.name
+            if self.bundle is not None:
+                for key in ("dataset", "dataset_name", "data_source"):
+                    value = self.bundle.attrs.get(key)
+                    if value is not None:
+                        dataset.attrs[key] = str(value)
+            save_netcdf(dataset, path)
+            _validate_reconstruction_netcdf(path, dataset)
+            return path
         except MissingDependencyError as exc:
             _unlink_quietly(path)
             raise NetCDFUnavailableError(str(exc)) from exc
@@ -607,11 +800,44 @@ def _unlink_quietly(path: Path) -> None:
         return
 
 
+def _validate_reconstruction_netcdf(path: Path, expected: Any) -> None:
+    """Reopen and validate an export before its path reaches FileResponse."""
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise ValueError("generated NetCDF file is missing or empty")
+    try:
+        import xarray as xr
+    except ImportError as exc:
+        raise MissingDependencyError("xarray is required to validate NetCDF exports") from exc
+    with xr.open_dataset(path) as actual:
+        if not actual.data_vars:
+            raise ValueError("generated NetCDF contains no scientific variables")
+        for name, variable in expected.variables.items():
+            if name not in actual.data_vars:
+                raise ValueError(f"generated NetCDF is missing variable {name!r}")
+            exported = actual[name]
+            expected_values = np.asarray(variable.values)
+            values = np.asarray(exported.values)
+            if tuple(exported.dims) != tuple(variable.dims) or values.shape != expected_values.shape:
+                raise ValueError(f"generated NetCDF variable {name!r} has an unexpected shape")
+            if not np.array_equal(values, expected_values, equal_nan=True):
+                raise ValueError(f"generated NetCDF variable {name!r} failed round-trip validation")
+            if variable.units and exported.attrs.get("units") != variable.units:
+                raise ValueError(f"generated NetCDF variable {name!r} has missing or invalid units")
+        for name, coordinates in expected.coords.items():
+            if name not in actual.coords:
+                raise ValueError(f"generated NetCDF is missing coordinate {name!r}")
+            values = np.asarray(actual[name].values)
+            if values.shape != coordinates.shape or not np.array_equal(values, coordinates, equal_nan=True):
+                raise ValueError(f"generated NetCDF coordinate {name!r} failed validation")
+        if not actual.attrs.get("title") or not actual.attrs.get("source"):
+            raise ValueError("generated NetCDF is missing provenance metadata")
+
+
 def _ocean_dataset_from_grid_result(result: PredictionResult):
     """Turn a real grid `PredictionResult` into an `OceanDataset`.
 
-    Axes follow `OceanDataset`'s canonical order (`time`, then `depth`
-    when every model depth was returned, then `lat`/`lon`). Values are
+    Axes follow `OceanDataset`'s canonical order (`time`, `depth`, `lat`,
+    `lon`), including a singleton depth coordinate for a depth slice. Values are
     the arrays `predict_grid` already produced — nothing is synthesized
     or resampled here.
     """
@@ -626,9 +852,10 @@ def _ocean_dataset_from_grid_result(result: PredictionResult):
     variables: Dict[str, Variable] = {}
 
     if temperature.ndim == 2:
-        temp_values = temperature[np.newaxis, ...]
-        temp_dims = ("time", "lat", "lon")
-        depth_attr: Optional[float] = float(np.asarray(result.depth).reshape(-1)[0])
+        depth_attr = float(np.asarray(result.depth).reshape(-1)[0])
+        coords["depth"] = np.asarray([depth_attr], dtype=np.float64)
+        temp_values = temperature[np.newaxis, np.newaxis, ...]
+        temp_dims = ("time", "depth", "lat", "lon")
     elif temperature.ndim == 3:
         depth = np.asarray(result.depth, dtype=np.float64)
         coords["depth"] = depth
@@ -646,8 +873,10 @@ def _ocean_dataset_from_grid_result(result: PredictionResult):
         "long_name": "reconstructed sea water temperature",
         "source": "NEER reconstruct_grid",
     }
-    if depth_attr is not None:
+    if temperature.ndim == 2:
         temp_attrs["depth_m"] = depth_attr
+    if not np.isfinite(temperature).any():
+        temp_attrs["data_status"] = "unavailable"
 
     variables["temperature"] = Variable(
         name="temperature",
@@ -657,11 +886,24 @@ def _ocean_dataset_from_grid_result(result: PredictionResult):
         attrs=temp_attrs,
     )
 
+    anomaly = np.asarray(result.anomaly, dtype=np.float32)
+    if anomaly.shape != temperature.shape:
+        raise ValueError("grid anomaly must match the returned temperature grid coordinates")
+    anomaly_values = anomaly[np.newaxis, np.newaxis, ...] if anomaly.ndim == 2 else np.transpose(anomaly, (2, 0, 1))[np.newaxis, ...]
+    variables["anomaly"] = Variable(
+        name="anomaly", values=anomaly_values, dims=temp_dims, units="degC",
+        attrs={
+            "long_name": "model output temperature anomaly from climatology",
+            "definition": "model output - climatology",
+            **({"data_status": "unavailable"} if not np.isfinite(anomaly).any() else {}),
+        },
+    )
+
     if result.climatology is not None:
         climatology = np.asarray(result.climatology, dtype=np.float32)
         if climatology.shape == temperature.shape:
             if climatology.ndim == 2:
-                clim_values = climatology[np.newaxis, ...]
+                clim_values = climatology[np.newaxis, np.newaxis, ...]
             else:
                 clim_values = np.transpose(climatology, (2, 0, 1))[np.newaxis, ...]
             variables["climatology"] = Variable(
@@ -669,7 +911,10 @@ def _ocean_dataset_from_grid_result(result: PredictionResult):
                 values=clim_values,
                 dims=temp_dims,
                 units="degC",
-                attrs={"long_name": "fitted climatology used to form reconstructed temperature"},
+                attrs={
+                    "long_name": "fitted climatology used to form reconstructed temperature",
+                    **({"data_status": "unavailable"} if not np.isfinite(climatology).any() else {}),
+                },
             )
 
     notes = "; ".join(str(n) for n in result.notes) if result.notes else ""

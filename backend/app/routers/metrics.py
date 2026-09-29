@@ -11,6 +11,7 @@ lives here — see `backend/app/services/evaluation.py`.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from typing import Any, Dict
 
 from backend.app.dependencies import get_repository
 from backend.app.errors import NeerApiError
@@ -24,6 +25,18 @@ from backend.app.services import evaluation as evaluation_service
 from backend.app.services.repository import NEERRepository
 
 router = APIRouter(tags=["evaluation"])
+
+
+@router.get("/evaluation/metrics")
+def get_comparison_metrics(
+    params: MetricsQueryParams = Depends(metrics_query_params),
+    repository: NEERRepository = Depends(get_repository),
+) -> Dict[str, Any]:
+    """Compare NEER with available baselines on the same held-out split."""
+    try:
+        return evaluation_service.comparison_metrics(repository, split=params.split)
+    except NeerApiError:
+        raise
 
 _ERROR_RESPONSES = {
     400: {"model": ErrorResponse, "description": "Invalid split name."},

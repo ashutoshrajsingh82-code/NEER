@@ -20,11 +20,13 @@
 import {
   isIsoDate,
   parseDatesPayload,
+  parseModelInfoDepths,
 } from "./dateDepthModel.js";
 
 import {
   validatePointReconstruction,
 } from "./reconstructionResponse.js";
+import { DEPTH_LEVELS, OCEAN_DOMAIN } from "./oceanDomain.js";
 
 // -----------------------------------------------------------------------------
 // Configuration
@@ -69,23 +71,14 @@ export class ApiError extends Error {
 // -----------------------------------------------------------------------------
 
 export function categorizeApiError(error) {
-  if (error instanceof ApiError) {
-    return error;
-  }
-
-  if (error?.name === "AbortError") {
-    return new ApiError({
-      code: API_ERROR_CODES.ABORTED,
-      message: "The API request was aborted.",
-      cause: error,
-    });
-  }
-
-  return new ApiError({
-    code: API_ERROR_CODES.NETWORK,
-    message: error?.message || "Network request failed.",
-    cause: error,
-  });
+  if (!(error instanceof ApiError)) return "unknown";
+  if (error.code === API_ERROR_CODES.TIMEOUT) return "timeout";
+  if (error.code === API_ERROR_CODES.CONFIG) return "config";
+  if (error.code === API_ERROR_CODES.ABORTED) return "aborted";
+  if (error.code === API_ERROR_CODES.NETWORK) return "network";
+  if (error.code === API_ERROR_CODES.INVALID_RESPONSE) return "invalid_response";
+  if (error.status !== null || error.code === API_ERROR_CODES.HTTP || error.code === API_ERROR_CODES.VALIDATION) return "api";
+  return "unknown";
 }
 
 // -----------------------------------------------------------------------------
@@ -95,7 +88,7 @@ export function categorizeApiError(error) {
 export function getBaseUrl() {
   const value = process.env.NEXT_PUBLIC_API_URL;
 
-  if (!value || typeof value !== "string") {
+  if (!value || typeof value !== "string" || !value.trim()) {
     throw new ApiError({
       code: API_ERROR_CODES.CONFIG,
       message:
@@ -139,7 +132,12 @@ function withQuery(url, query = {}) {
 
 async function parseBody(response, responseType = "json") {
   if (responseType === "blob") {
-    return response.blob();
+    const blob = await response.blob();
+    return {
+      blob,
+      filename: filenameFromContentDisposition(response.headers?.get?.("content-disposition")),
+      contentType: response.headers?.get?.("content-type") || blob.type || "application/octet-stream",
+    };
   }
 
   if (responseType === "text") {
@@ -201,11 +199,18 @@ function filenameFromContentDisposition(value) {
 
 async function errorFromResponse(response) {
   let body = null;
-
+  let malformed = false;
   try {
-    body = await parseBody(response, "json");
+    const raw = await response.text();
+    if (raw) {
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        malformed = true;
+      }
+    }
   } catch {
-    body = null;
+    malformed = true;
   }
 
   const detail =
@@ -229,10 +234,18 @@ async function errorFromResponse(response) {
   }
 
   return new ApiError({
-    code: API_ERROR_CODES.HTTP,
+    code: malformed
+      ? API_ERROR_CODES.INVALID_RESPONSE
+      : response.status === 422
+        ? API_ERROR_CODES.VALIDATION
+        : (typeof body?.error === "string" ? body.error : API_ERROR_CODES.HTTP),
     message,
     status: response.status,
-    details: body,
+    details: response.status === 422 && Array.isArray(body?.detail)
+      ? body.detail
+      : typeof body?.error === "string"
+        ? Object.fromEntries(Object.entries(body).filter(([key]) => key !== "error" && key !== "detail"))
+        : body,
   });
 }
 
@@ -260,7 +273,7 @@ export async function apiRequest(
       query
     );
   } catch (error) {
-    throw categorizeApiError(error);
+    throw error;
   }
 
   const controller = new AbortController();
@@ -444,6 +457,11 @@ export function health(options = {}) {
   return get("/health", {}, options);
 }
 
+/** Live, validated-by-contract context from the configured demo backend. */
+export function demoContext(options = {}) {
+  return get("/demo/context", {}, options);
+}
+
 // -----------------------------------------------------------------------------
 // Model information
 // -----------------------------------------------------------------------------
@@ -452,7 +470,13 @@ export function health(options = {}) {
 // -----------------------------------------------------------------------------
 
 export function modelInfo(options = {}) {
-  return get("/model/info", {}, options);
+  return get("/model/info", {}, options).then((payload) => {
+    const parsed = parseModelInfoDepths(payload);
+    if (!parsed.ok) {
+      throw new ApiError({ code: API_ERROR_CODES.INVALID_RESPONSE, message: parsed.reason, status: 200 });
+    }
+    return payload;
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -471,7 +495,11 @@ export async function dates(options = {}) {
     options
   );
 
-  return parseDatesPayload(payload);
+  const parsed = parseDatesPayload(payload);
+  if (!parsed.ok) {
+    throw new ApiError({ code: API_ERROR_CODES.INVALID_RESPONSE, message: parsed.reason, status: 200 });
+  }
+  return payload;
 }
 
 // -----------------------------------------------------------------------------
@@ -560,32 +588,32 @@ export async function runReconstruction(
   if (
     typeof depth !== "number" ||
     !Number.isFinite(depth) ||
-    depth < 0
+    !DEPTH_LEVELS.includes(depth)
   ) {
     problems.push(
-      "depth must be a finite number of metres >= 0"
+      `depth must be one of the supported NEER levels: ${DEPTH_LEVELS.join(", ")}`
     );
   }
 
   if (
     typeof latitude !== "number" ||
     !Number.isFinite(latitude) ||
-    latitude < -90 ||
-    latitude > 90
+    latitude < OCEAN_DOMAIN.latMin ||
+    latitude > OCEAN_DOMAIN.latMax
   ) {
     problems.push(
-      "latitude must be a finite number in [-90, 90]"
+      `latitude must be a finite number within the NEER domain [${OCEAN_DOMAIN.latMin}, ${OCEAN_DOMAIN.latMax}]`
     );
   }
 
   if (
     typeof longitude !== "number" ||
     !Number.isFinite(longitude) ||
-    longitude < -180 ||
-    longitude > 360
+    longitude < OCEAN_DOMAIN.lonMin ||
+    longitude > OCEAN_DOMAIN.lonMax
   ) {
     problems.push(
-      "longitude must be a finite number in [-180, 360]"
+      `longitude must be a finite number within the NEER domain [${OCEAN_DOMAIN.lonMin}, ${OCEAN_DOMAIN.lonMax}]`
     );
   }
 
@@ -630,6 +658,15 @@ export async function runReconstruction(
     });
   }
 
+  if (result.value.depth !== depth || result.value.lat !== latitude || result.value.lon !== longitude) {
+    throw new ApiError({
+      code: API_ERROR_CODES.INVALID_RESPONSE,
+      message: "GET /reconstruct returned data for a different depth or coordinate than requested.",
+      status: 200,
+      details: { requested: { depth, latitude, longitude }, returned: { depth: result.value.depth, latitude: result.value.lat, longitude: result.value.lon } },
+    });
+  }
+
   return result.value;
 }
 
@@ -643,12 +680,16 @@ export async function runReconstruction(
 // -----------------------------------------------------------------------------
 
 export function reconstructGrid(
-  { date, depth } = {},
+  { date, depth, latMin, latMax, lonMin, lonMax, lat_min, lat_max, lon_min, lon_max } = {},
   options = {}
 ) {
   return get(
     "/reconstruct/grid",
     {
+      lat_min: lat_min ?? latMin,
+      lat_max: lat_max ?? latMax,
+      lon_min: lon_min ?? lonMin,
+      lon_max: lon_max ?? lonMax,
       date: toDateParam(date),
       depth,
     },
@@ -700,6 +741,11 @@ export function embedding(
   );
 }
 
+/** Fetch the canonical domain-pooled embedding for one backend-listed date. */
+export function getEmbedding({ date } = {}, options = {}) {
+  return get("/embedding", { date: toDateParam(date) }, options);
+}
+
 // -----------------------------------------------------------------------------
 // Metrics
 // -----------------------------------------------------------------------------
@@ -707,19 +753,24 @@ export function embedding(
 // GET /metrics
 // -----------------------------------------------------------------------------
 
-export function metrics(options = {}) {
+export function metrics(params = {}, options = {}) {
   return get(
     "/metrics",
-    {},
+    params,
     options
   );
+}
+
+/** Fetch depth-wise comparison metrics for NEER and available baselines. */
+export function evaluationMetrics(params = {}, options = {}) {
+  return get("/evaluation/metrics", params, options);
 }
 
 // -----------------------------------------------------------------------------
 // Argo evaluation
 // -----------------------------------------------------------------------------
 //
-// GET /argo/evaluation
+// GET /evaluation/argo
 // -----------------------------------------------------------------------------
 
 export function argoEvaluation(
@@ -727,7 +778,7 @@ export function argoEvaluation(
   options = {}
 ) {
   return get(
-    "/argo/evaluation",
+    "/evaluation/argo",
     params,
     options
   );
@@ -788,33 +839,29 @@ export async function netcdfExport(
   options = {}
 ) {
   const response = await apiRequest(
-    "/export/netcdf",
+    "/reconstruct/netcdf",
     {
       ...options,
       method: "GET",
-      query: params,
+      query: {
+        lat_min: params.latMin ?? params.lat_min,
+        lat_max: params.latMax ?? params.lat_max,
+        lon_min: params.lonMin ?? params.lon_min,
+        lon_max: params.lonMax ?? params.lon_max,
+        date: toDateParam(params.date),
+        depth: params.depth,
+      },
       responseType: "blob",
     }
   );
 
-  const headers = response?.headers;
-
-  // apiRequest returns the Blob itself for responseType="blob".
-  // Fetch headers are therefore not available here.
-  //
-  // Preserve compatibility by returning the blob directly when the
-  // response does not expose headers.
-  if (response instanceof Blob) {
-    return {
-      blob: response,
-      filename: "neer-reconstruction.nc",
-      contentType:
-        response.type ||
-        "application/x-netcdf",
-    };
-  }
-
-  return response;
+  const date = toDateParam(params.date);
+  const depth = params.depth == null ? "" : `_${params.depth}m`;
+  return {
+    ...response,
+    filename: response?.filename || `neer_reconstruct${date ? `_${date}` : ""}${depth}.nc`,
+    contentType: response?.contentType || response?.blob?.type || "application/x-netcdf",
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -830,7 +877,9 @@ export default {
   reconstructGrid,
   profile,
   embedding,
+  getEmbedding,
   metrics,
+  evaluationMetrics,
   argoEvaluation,
   explainability,
   dataQuality,

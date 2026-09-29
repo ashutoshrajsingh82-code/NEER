@@ -37,6 +37,7 @@ def test_reconstruct_response_schema(client):
     }
     assert data["mode"] == "point"
     assert isinstance(data["temperature"], float)
+    assert data["anomaly"] is None
     assert data["lat"] == pytest.approx(VALID_PARAMS["lat"])
     assert data["lon"] == pytest.approx(VALID_PARAMS["lon"])
     assert data["date"] == VALID_PARAMS["date"]
@@ -49,12 +50,13 @@ def test_reconstruct_snaps_to_nearest_model_depth(client):
     assert data["depth"] == 100.0
 
 
-def test_reconstruct_without_climatology_notes_the_fallback(client):
-    # No climatology fixture is ever written -> temperature == anomaly,
-    # and the service is honest about it via `notes`.
+def test_reconstruct_without_climatology_preserves_temperature_but_omits_anomaly(client):
+    # The model predicts absolute temperature; climatology is only needed
+    # to derive an anomaly from that prediction.
     data = client.get("/reconstruct", params=VALID_PARAMS).json()
     assert data["climatology"] is None
-    assert data["temperature"] == pytest.approx(data["anomaly"])
+    assert isinstance(data["temperature"], float)
+    assert data["anomaly"] is None
     assert any("climatology" in note for note in data["notes"])
 
 

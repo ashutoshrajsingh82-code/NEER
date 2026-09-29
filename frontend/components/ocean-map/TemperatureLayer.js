@@ -35,8 +35,8 @@ import { PX_PER_DEGREE, project } from "./landmask";
  * @param {{lat: number[], lon: number[]}} props.grid - coordinate axes from
  *   the backend response (GridReconstructionResponse.lat/.lon)
  * @param {number[][]} props.values - `(lat.length, lon.length)` field
- *   values, already resolved to the active variable (temperature, or
- *   temperature-minus-climatology for anomaly) and with missing cells as
+ *   values, already resolved to the active variable (temperature or the
+ *   canonical backend anomaly) and with missing cells as
  *   `null` — see useOceanMapLayer.js
  * @param {(value: number|null) => (string|null)} props.colorMapper - maps
  *   one cell's value to a CSS color, or `null` to skip drawing that cell

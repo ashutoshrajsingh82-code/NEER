@@ -6,8 +6,7 @@
 // Previous / calendar / next. Pure presentation over the shared date state
 // (DateDepthContext): it dispatches `onSelectDate` / `onStepDate` and shows
 // whatever `date` it is given. Previous/next move through the AVAILABLE
-// backend dates (not ±1 calendar day) and are disabled at the first/last
-// date, while dates are loading, and when there are none.
+// backend dates and are disabled at the dataset's first/last calendar day.
 // -----------------------------------------------------------------------------
 
 import { useCallback, useRef, useState } from "react";
@@ -80,8 +79,8 @@ export default function DateControls({
           size="sm"
           iconOnly
           icon={ChevronLeft}
-          aria-label="Previous available date"
-          title="Previous available date"
+          aria-label="Previous day"
+          title="Previous day"
           disabled={!canStepPrev || loading}
           onClick={() => onStepDate?.(-1)}
         />
@@ -114,8 +113,8 @@ export default function DateControls({
           size="sm"
           iconOnly
           icon={ChevronRight}
-          aria-label="Next available date"
-          title="Next available date"
+          aria-label="Next day"
+          title="Next day"
           disabled={!canStepNext || loading}
           onClick={() => onStepDate?.(1)}
         />

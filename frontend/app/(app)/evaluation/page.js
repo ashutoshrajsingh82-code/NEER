@@ -1,12 +1,7 @@
-import RoutePlaceholder from "../_components/RoutePlaceholder";
+import EvaluationClient from "./EvaluationClient";
 
 export const metadata = { title: "Evaluation — NEER" };
 
 export default function EvaluationPage() {
-  return (
-    <RoutePlaceholder
-      title="Evaluation"
-      description="Model evaluation metrics against validation and Argo data."
-    />
-  );
+  return <EvaluationClient />;
 }

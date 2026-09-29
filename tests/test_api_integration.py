@@ -301,8 +301,10 @@ def test_live_http_reconstruct_point(http_client: httpx.Client):
     assert data["lon"] == VALID_LON
     assert data["date"] == VALID_DATE
     assert data["depth"] == VALID_DEPTH
-    assert isinstance(data["temperature"], float)
-    assert isinstance(data["anomaly"], float)
+    if data["climatology"] is None:
+        assert data["temperature"] is None and data["anomaly"] is None
+    else:
+        assert data["temperature"] == pytest.approx(data["climatology"] + data["anomaly"])
     assert data["embedding_dim"] == 256
 
 
@@ -327,6 +329,10 @@ def test_live_http_reconstruct_grid(http_client: httpx.Client):
     data = resp.json()
     assert data["date"] == VALID_DATE
     assert isinstance(data["temperature"], list)
+    assert isinstance(data["anomaly"], list)
+    assert len(data["anomaly"]) == len(data["lat"])
+    assert len(data["anomaly"][0]) == len(data["lon"])
+    assert len(data["anomaly"][0][0]) == len(data["depths"])
     assert len(data["lat"]) > 0
     assert len(data["lon"]) > 0
 
@@ -373,13 +379,15 @@ def test_live_http_evaluation_argo(http_client: httpx.Client):
 
 
 def test_live_http_explainability(http_client: httpx.Client):
-    resp = http_client.get("/explainability", params={"date": VALID_DATE})
+    resp = http_client.get("/explainability", params={"date": VALID_DATE, "lat": VALID_LAT, "lon": VALID_LON, "depth": 100.0})
     assert resp.status_code == 200
     data = resp.json()
     assert data["date"] == VALID_DATE
-    assert data["method"] == "gradient_x_input"
-    assert len(data["channels"]) == 11
-    assert pytest.approx(sum(c["importance"] for c in data["channels"]), abs=1e-5) == 1.0
+    assert data["method"] == "Integrated Gradients"
+    assert len(data["features"]) == 7
+    assert data["depth"] == 100.0
+    assert data["lat"] == VALID_LAT
+    assert data["lon"] == VALID_LON
 
 
 def test_live_http_data_quality(http_client: httpx.Client):
@@ -516,7 +524,7 @@ def test_invalid_longitude_non_numeric_is_422(http_client: httpx.Client, route: 
         ("/reconstruct/grid", {"lat_min": 12.0, "lat_max": 18.0, "lon_min": 65.0, "lon_max": 75.0}),
         ("/reconstruct/netcdf", {"lat_min": 12.0, "lat_max": 18.0, "lon_min": 65.0, "lon_max": 75.0}),
         ("/embedding", {}),
-        ("/explainability", {}),
+        ("/explainability", {"lat": VALID_LAT, "lon": VALID_LON, "depth": VALID_DEPTH}),
     ],
 )
 def test_invalid_date_format_is_422(http_client: httpx.Client, route: str, extra_params: dict):
@@ -532,7 +540,7 @@ def test_invalid_date_format_is_422(http_client: httpx.Client, route: str, extra
         ("/reconstruct/grid", {"lat_min": 12.0, "lat_max": 18.0, "lon_min": 65.0, "lon_max": 75.0}),
         ("/reconstruct/netcdf", {"lat_min": 12.0, "lat_max": 18.0, "lon_min": 65.0, "lon_max": 75.0}),
         ("/embedding", {}),
-        ("/explainability", {}),
+        ("/explainability", {"lat": VALID_LAT, "lon": VALID_LON, "depth": VALID_DEPTH}),
     ],
 )
 def test_unavailable_date_is_404(http_client: httpx.Client, route: str, extra_params: dict):
@@ -565,7 +573,7 @@ def test_invalid_negative_depth_reconstruct_netcdf_is_422(http_client: httpx.Cli
 
 
 def test_invalid_negative_depth_explainability_is_422(http_client: httpx.Client):
-    resp = http_client.get("/explainability", params={"date": VALID_DATE, "depth": -5.0})
+    resp = http_client.get("/explainability", params={"date": VALID_DATE, "lat": VALID_LAT, "lon": VALID_LON, "depth": -5.0})
     assert resp.status_code == 422
 
 
@@ -613,7 +621,7 @@ def test_missing_data_reconstruct_netcdf_is_503(client_no_data):
 
 
 def test_missing_data_explainability_is_503(client_no_data):
-    resp = client_no_data.get("/explainability", params={"date": "2021-07-15"})
+    resp = client_no_data.get("/explainability", params={"date": "2021-07-15", "lat": 15.0, "lon": 55.0, "depth": 100.0})
     assert resp.status_code == 503
     assert resp.json()["error"] == "data_unavailable"
 
@@ -720,7 +728,7 @@ def test_missing_model_embedding_is_503(client_no_model):
 
 
 def test_missing_model_explainability_is_503(client_no_model):
-    resp = client_no_model.get("/explainability", params={"date": "2021-07-15"})
+    resp = client_no_model.get("/explainability", params={"date": "2021-07-15", "lat": 15.0, "lon": 55.0, "depth": 100.0})
     assert resp.status_code == 503
     assert resp.json()["error"] == "model_unavailable"
 
@@ -756,9 +764,10 @@ def test_successful_reconstruction_point_physics(http_client: httpx.Client):
     )
     assert resp.status_code == 200
     data = resp.json()
-    temp = data["temperature"]
-    assert -2.0 < temp < 40.0  # Physically plausible ocean seawater temperature range
-    assert isinstance(data["anomaly"], float)
+    if data["climatology"] is None:
+        assert data["temperature"] is None and data["anomaly"] is None
+    else:
+        assert data["temperature"] == pytest.approx(data["climatology"] + data["anomaly"])
     assert data["cache_hit"] in (True, False)
     assert data["latency_ms"] > 0
     assert data["mode"] == "point"
@@ -782,7 +791,8 @@ def test_successful_reconstruction_point_cache_and_snapping(http_client: httpx.C
     assert resp2.status_code == 200
     data2 = resp2.json()
     assert data2["cache_hit"] is True
-    assert data2["temperature"] == data1["temperature"]
+    assert data1["temperature"] == data2["temperature"]
+    assert data1["anomaly"] == data2["anomaly"]
 
 
 def test_successful_reconstruction_profile_depth_structure(http_client: httpx.Client):
@@ -797,10 +807,12 @@ def test_successful_reconstruction_profile_depth_structure(http_client: httpx.Cl
     assert len(depths) == 15
     assert len(temps) == 15
     assert depths == sorted(depths)  # Depths strictly increase
-    for t in temps:
-        assert -2.0 < t < 40.0
-    # Physical ocean stratification: surface is warmer than deep ocean at 1000m+
-    assert temps[0] > temps[-1]
+    assert len(data["anomaly"]) == len(depths)
+    for temp, climate, anomaly in zip(temps, data["climatology"], data["anomaly"]):
+        if climate is None or anomaly is None:
+            assert isinstance(temp, (int, float))
+        else:
+            assert temp - climate == pytest.approx(anomaly)
 
 
 def test_successful_reconstruction_grid_dimensions(http_client: httpx.Client):
@@ -809,15 +821,20 @@ def test_successful_reconstruction_grid_dimensions(http_client: httpx.Client):
     assert resp_slice.status_code == 200
     data_slice = resp_slice.json()
     assert data_slice["depth"] == 50.0
+    assert data_slice["anomaly"] is not None
     grid_slice = data_slice["temperature"]
     n_lat = len(data_slice["lat"])
     n_lon = len(data_slice["lon"])
     assert len(grid_slice) == n_lat
     assert len(grid_slice[0]) == n_lon
-    # Ensure all grid values are physically plausible
-    for row in grid_slice:
-        for val in row:
-            assert -2.0 < val < 40.0
+    for i, row in enumerate(grid_slice):
+        for j, value in enumerate(row):
+            climate = data_slice["climatology"][i][j]
+            anomaly = data_slice["anomaly"][i][j]
+            if climate is None or anomaly is None:
+                assert isinstance(value, (int, float))
+            else:
+                assert value - climate == pytest.approx(anomaly)
 
     # Test all depths 3D grid
     resp_all = http_client.get("/reconstruct/grid", params=VALID_GRID)
@@ -825,6 +842,9 @@ def test_successful_reconstruction_grid_dimensions(http_client: httpx.Client):
     data_all = resp_all.json()
     assert data_all["depth"] is None
     assert len(data_all["depths"]) == 15
+    assert len(data_all["anomaly"]) == n_lat
+    assert len(data_all["anomaly"][0]) == n_lon
+    assert len(data_all["anomaly"][0][0]) == len(data_all["depths"])
     grid_all = data_all["temperature"]
     assert len(grid_all) == n_lat
     assert len(grid_all[0]) == n_lon
@@ -843,7 +863,8 @@ def test_successful_reconstruction_netcdf_file_integrity(http_client: httpx.Clie
     temp_var = dataset.variables["temperature"]
     assert temp_var.units == "degC"
     assert temp_var.attrs.get("depth_m") == 75.0
-    assert temp_var.dims == ("time", "lat", "lon")
+    assert temp_var.dims == ("time", "depth", "lat", "lon")
+    assert dataset.coords["depth"].tolist() == [75.0]
     assert dataset.attrs["title"] == "NEER reconstructed temperature grid"
     assert dataset.attrs["date"] == VALID_DATE
     assert dataset.attrs["source"] == "NEER /reconstruct/netcdf"

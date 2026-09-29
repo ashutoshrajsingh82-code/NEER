@@ -542,12 +542,15 @@ def check_missing_values(
 
         fraction = missing_fraction(variable.values)
         if fraction >= 1.0:
-            report.error(
-                check,
-                "variable is entirely missing (100% NaN) — check the fill value, "
-                "the variable name, and the subsetting applied at read time",
-                target=name,
-            )
+            if variable.attrs.get("data_status") == "unavailable":
+                report.info(check, "variable is explicitly marked unavailable by its producer", target=name)
+            else:
+                report.error(
+                    check,
+                    "variable is entirely missing (100% NaN) — check the fill value, "
+                    "the variable name, and the subsetting applied at read time",
+                    target=name,
+                )
         elif fraction > warn_fraction:
             report.warn(
                 check,

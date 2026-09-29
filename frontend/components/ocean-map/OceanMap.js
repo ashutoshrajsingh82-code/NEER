@@ -42,10 +42,11 @@
 //
 // Phase 35C-A adds the temperature-anomaly and scientific-grid layers this
 // phase's spec asks for:
-//   - Anomaly is `activeVariable === "anomaly"`, already served by the same
-//     useOceanMapLayer.js/TemperatureLayer.js machinery as SST (see that
-//     hook's header for exactly how `temperature - climatology` is derived
-//     from two real backend grids, never invented) — this phase makes its
+//   - Anomaly is `activeVariable === "anomaly"`, served by the same
+//     useOceanMapLayer.js/TemperatureLayer.js machinery as model output.
+//     The hook consumes the backend's canonical, model-depth anomaly grid
+//     and validates its alignment with the returned temperature/climatology
+//     grids; the client does not derive an alternate anomaly field. This phase makes its
 //     loading/error/missing-data states share the same StatusIndicator
 //     vocabulary as the rest of the design system instead of ad hoc markup.
 //   - GridOverlay.js replaces the old fixed-pixel "fineGrid" pattern with
@@ -105,15 +106,16 @@ import MapControls from "./MapControls";
 import MapLegend from "./MapLegend";
 import TemperatureLayer from "./TemperatureLayer";
 import { useOceanMapLayer } from "./useOceanMapLayer";
+import AnomalySummary from "@/components/science/AnomalySummary";
 
 // Variable/layer tabs — the four with real interaction wired (sst/sss/
 // currents/anomaly) plus the remaining layers named in the phase spec,
 // present but disabled so the map's chrome is already shaped for them.
 const VARIABLE_TABS = [
-  { value: "sst", label: "Sea Surface Temp.", icon: Thermometer },
+  { value: "sst", label: "MODEL OUTPUT", icon: Thermometer },
   { value: "sss", label: "Salinity", icon: Droplets },
   { value: "currents", label: "Currents", icon: Navigation },
-  { value: "anomaly", label: "Anomaly", icon: TrendingUp },
+  { value: "anomaly", label: "ANOMALY", icon: TrendingUp },
   { value: "ssh", label: "SSH / SLA", icon: ArrowUpDown, disabled: true },
   { value: "winds", label: "Winds", icon: Wind, disabled: true },
   { value: "subsurface", label: "Subsurface Temp.", icon: Layers, disabled: true },
@@ -402,7 +404,7 @@ export default function OceanMap({
     // Invalid coordinates are ignored; in-domain points snap to a grid cell
     // (with its indices); out-of-domain points are kept as raw coordinates.
     const selection = toGridSelection(lat, lon);
-    if (selection) selectPoint(selection);
+    if (selection) selectPoint({ ...selection, clicked: { lat, lon } });
   }
 
   function handleDoubleClick(event) {
@@ -708,6 +710,8 @@ export default function OceanMap({
     hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(currentGrid, layer.temperatureValues, hover) : null;
   const hoverAnomaly =
     hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(currentGrid, layer.anomalyValues, hover) : null;
+  const hoverClimatology =
+    hoverStatus === POINT_STATUS.OCEAN ? lookupFieldValue(currentGrid, layer.climatologyValues, hover) : null;
 
   // Outline of the selected grid cell, in world space (scales with the map).
   const selectedCellRect = useMemo(() => {
@@ -1109,15 +1113,19 @@ export default function OceanMap({
             ) : (
               <>
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-text-muted">Temperature</span>
+                  <span className="text-text-muted">MODEL OUTPUT</span>
                   <span className="font-mono text-text-primary">
-                    {hoverTemperature === null ? "-- (no data)" : `${hoverTemperature.toFixed(2)}°C`}
+                    {hoverTemperature === null ? "N/A" : `${hoverTemperature.toFixed(2)}°C`}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-text-muted">Anomaly</span>
+                  <span className="text-text-muted">CLIMATOLOGY</span>
+                  <span className="font-mono text-text-primary">{hoverClimatology === null ? "N/A" : `${hoverClimatology.toFixed(2)}°C`}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-text-muted">ANOMALY</span>
                   <span className="font-mono text-text-primary">
-                    {hoverAnomaly === null ? "-- (no data)" : `${formatSigned(hoverAnomaly)}°C`}
+                    {hoverAnomaly === null ? "N/A" : `${formatSigned(hoverAnomaly)}°C`}
                   </span>
                 </div>
               </>
@@ -1152,6 +1160,11 @@ export default function OceanMap({
             layer={layer}
             fieldVisible={layerVisibility.temperatureField}
           >
+            {activeVariable === "anomaly" ? <div className="flex flex-col gap-2">
+              <p className="text-[10px] text-text-muted">ΔT = T_prediction − climatology</p>
+              {layer.isUpdating ? <p role="status" className="text-caption text-text-muted">Loading anomaly for the selected date, depth, and map view…</p>
+                : <AnomalySummary values={layer.isStale ? null : layer.values} scope={`${date ?? "current date"}, ${formatDepth(depth)} map grid`} />}
+            </div> : null}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-text-muted">
               <span className="flex items-center gap-1.5">
                 <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: "#0E2A42" }} aria-hidden="true" />

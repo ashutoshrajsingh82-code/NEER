@@ -285,6 +285,15 @@ class MonthlyClimatology(LearnedStep):
         index[dims.index("lon")] = self._nearest(self._lon, lon, "lon")
         return float(field[tuple(index)])
 
+    def nearest_coordinates(self, lat: float, lon: float) -> Optional[Tuple[float, float]]:
+        """Actual climatology grid coordinates used by nearest-neighbour lookup."""
+        if self._lat is None or self._lon is None:
+            return None
+        return (
+            float(self._lat[self._nearest(self._lat, lat, "lat")]),
+            float(self._lon[self._nearest(self._lon, lon, "lon")]),
+        )
+
     # -- depth lookup --------------------------------------------------
 
     def depth_profile(self, variable: str, month: int, lat: float, lon: float) -> np.ndarray:

@@ -163,20 +163,20 @@ export default function DashboardKPIs() {
         ) : (
           <>
             <PointMetricCard
-              title="Reconstructed Temp."
+              title="MODEL OUTPUT"
               icon={Thermometer}
               unit="°C"
               pointInspection={pointInspection}
               pointStatus={pointStatus}
-              extract={(data) => (typeof data.temperature === "number" ? data.temperature.toFixed(2) : "--")}
+              extract={(data) => (typeof data.temperature === "number" && Number.isFinite(data.temperature) ? data.temperature.toFixed(2) : "N/A")}
             />
             <PointMetricCard
-              title="Anomaly"
+              title="ANOMALY"
               icon={TrendingUp}
               unit="°C"
               pointInspection={pointInspection}
               pointStatus={pointStatus}
-              extract={(data) => formatSigned(data.anomaly)}
+              extract={(data) => typeof data.anomaly === "number" && Number.isFinite(data.anomaly) ? formatSigned(data.anomaly) : "N/A"}
             />
             <PointMetricCard
               title="Model Confidence"
