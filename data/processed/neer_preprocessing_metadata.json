@@ -1,0 +1,1281 @@
+{
+  "pipeline": "neer-preprocessing",
+  "version": "1.0.0",
+  "created_at": "2026-09-18T09:30:28.614230+00:00",
+  "project": {
+    "name": "NEER",
+    "problem_id": "SIH26066",
+    "organization": "MoES / INCOIS"
+  },
+  "environment": "development",
+  "source": {
+    "source": "/home/claude/neer_project/NEER/data/demo/neer_demo_ocean_dataset.npz",
+    "source_format": "npz (demo)",
+    "data_mode": "DEMO_SYNTHETIC",
+    "is_synthetic": true,
+    "sizes": {
+      "time": 24,
+      "depth": 15,
+      "lat": 101,
+      "lon": 241
+    },
+    "time_range": [
+      "2020-01-15T00:00:00.000000000",
+      "2021-12-15T00:00:00.000000000"
+    ],
+    "variables": [
+      {
+        "name": "land_mask",
+        "dims": [
+          "lat",
+          "lon"
+        ],
+        "shape": [
+          101,
+          241
+        ],
+        "dtype": "bool",
+        "units": "bool",
+        "missing_fraction": 0.0,
+        "n_missing": 0,
+        "min": 0.0,
+        "max": 1.0
+      },
+      {
+        "name": "sla",
+        "dims": [
+          "time",
+          "lat",
+          "lon"
+        ],
+        "shape": [
+          24,
+          101,
+          241
+        ],
+        "dtype": "float32",
+        "units": "m",
+        "missing_fraction": 0.518655,
+        "n_missing": 302990,
+        "min": -0.18653930723667145,
+        "max": 0.21537329256534576
+      },
+      {
+        "name": "sss",
+        "dims": [
+          "time",
+          "lat",
+          "lon"
+        ],
+        "shape": [
+          24,
+          101,
+          241
+        ],
+        "dtype": "float32",
+        "units": "psu",
+        "missing_fraction": 0.525721,
+        "n_missing": 307118,
+        "min": 31.766462326049805,
+        "max": 36.31299591064453
+      },
+      {
+        "name": "sst",
+        "dims": [
+          "time",
+          "lat",
+          "lon"
+        ],
+        "shape": [
+          24,
+          101,
+          241
+        ],
+        "dtype": "float32",
+        "units": "degC",
+        "missing_fraction": 0.527474,
+        "n_missing": 308142,
+        "min": 24.04955291748047,
+        "max": 30.76124382019043
+      },
+      {
+        "name": "subsurface_temp",
+        "dims": [
+          "time",
+          "depth",
+          "lat",
+          "lon"
+        ],
+        "shape": [
+          24,
+          15,
+          101,
+          241
+        ],
+        "dtype": "float32",
+        "units": "degC",
+        "missing_fraction": 0.757168,
+        "n_missing": 6634879,
+        "min": 3.8499999046325684,
+        "max": 30.558237075805664
+      },
+      {
+        "name": "u_current",
+        "dims": [
+          "time",
+          "lat",
+          "lon"
+        ],
+        "shape": [
+          24,
+          101,
+          241
+        ],
+        "dtype": "float32",
+        "units": "m/s",
+        "missing_fraction": 0.517914,
+        "n_missing": 302557,
+        "min": -0.35582002997398376,
+        "max": 0.3302060067653656
+      },
+      {
+        "name": "u_wind",
+        "dims": [
+          "time",
+          "lat",
+          "lon"
+        ],
+        "shape": [
+          24,
+          101,
+          241
+        ],
+        "dtype": "float32",
+        "units": "m/s",
+        "missing_fraction": 0.522248,
+        "n_missing": 305089,
+        "min": -7.49055290222168,
+        "max": 7.411418437957764
+      },
+      {
+        "name": "v_current",
+        "dims": [
+          "time",
+          "lat",
+          "lon"
+        ],
+        "shape": [
+          24,
+          101,
+          241
+        ],
+        "dtype": "float32",
+        "units": "m/s",
+        "missing_fraction": 0.531526,
+        "n_missing": 310509,
+        "min": -0.2775844931602478,
+        "max": 0.28724056482315063
+      },
+      {
+        "name": "v_wind",
+        "dims": [
+          "time",
+          "lat",
+          "lon"
+        ],
+        "shape": [
+          24,
+          101,
+          241
+        ],
+        "dtype": "float32",
+        "units": "m/s",
+        "missing_fraction": 0.529977,
+        "n_missing": 309604,
+        "min": -5.337696552276611,
+        "max": 5.103182315826416
+      }
+    ],
+    "attrs": {
+      "data_mode": "DEMO_SYNTHETIC",
+      "generated_at_utc": "2026-09-18T08:50:00.337010+00:00",
+      "generator": "scripts/create_demo_data.py",
+      "project": "NEER",
+      "problem_id": "SIH26066",
+      "organization": "MoES / INCOIS",
+      "seed": 42,
+      "environment": "demo",
+      "domain": {
+        "lat_min": 5,
+        "lat_max": 30,
+        "lon_min": 45,
+        "lon_max": 105,
+        "resolution_deg": 0.25
+      },
+      "grid_shape": {
+        "n_lat": 101,
+        "n_lon": 241
+      },
+      "depths_m": [
+        0,
+        5,
+        10,
+        20,
+        30,
+        50,
+        75,
+        100,
+        125,
+        150,
+        200,
+        300,
+        500,
+        700,
+        1000
+      ],
+      "n_time_steps": 24,
+      "time_range": [
+        "2020-01-15",
+        "2021-12-15"
+      ],
+      "missing_values": "NaN over land and over synthetic gap patches (cloud-like for surface fields, sparser ARGO-like coverage for subsurface_temp)"
+    }
+  },
+  "split": {
+    "strategy": "chronological",
+    "train_end_exclusive": "2021-05-01T00:00:00.000000000",
+    "val_end_exclusive": "2021-09-01T00:00:00.000000000",
+    "counts": {
+      "train": 16,
+      "val": 4,
+      "test": 4
+    },
+    "ranges": {
+      "train": [
+        "2020-01-01T00:00:00.000000000",
+        "2021-04-01T00:00:00.000000000"
+      ],
+      "val": [
+        "2021-05-01T00:00:00.000000000",
+        "2021-08-01T00:00:00.000000000"
+      ],
+      "test": [
+        "2021-09-01T00:00:00.000000000",
+        "2021-12-01T00:00:00.000000000"
+      ]
+    },
+    "fitted_on": {
+      "n_timesteps": 16,
+      "first": "2020-01-01T00:00:00.000000000",
+      "last": "2021-04-01T00:00:00.000000000"
+    },
+    "spatial_coverage": {
+      "grid_shape": [
+        101,
+        241
+      ],
+      "lat_range": [
+        5.0,
+        30.0
+      ],
+      "lon_range": [
+        45.0,
+        105.0
+      ],
+      "ocean_fraction": 0.541309,
+      "by_period": {
+        "train": {
+          "n_timesteps": 16,
+          "valid_fraction": 0.49958,
+          "cells_ever_observed_fraction": 1.0
+        },
+        "val": {
+          "n_timesteps": 4,
+          "valid_fraction": 0.498778,
+          "cells_ever_observed_fraction": 1.0
+        },
+        "test": {
+          "n_timesteps": 4,
+          "valid_fraction": 0.498385,
+          "cells_ever_observed_fraction": 1.0
+        }
+      }
+    }
+  },
+  "leakage": {
+    "policy": "Chronological split. (1) Steps that learn from data are fitted on the training period only. (2) After the split, each period is transformed in its own dataset, so no step can interpolate or aggregate across a split boundary.",
+    "guard": "src.data.preprocessing.splits.assert_fit_window",
+    "split_decided_after": "temporal_alignment",
+    "learned_steps": [
+      {
+        "step": "missing_values",
+        "n_timesteps": 16,
+        "first": "2020-01-01T00:00:00.000000000",
+        "last": "2021-04-01T00:00:00.000000000",
+        "guard": "assert_fit_window"
+      },
+      {
+        "step": "normalization",
+        "n_timesteps": 16,
+        "first": "2020-01-01T00:00:00.000000000",
+        "last": "2021-04-01T00:00:00.000000000",
+        "guard": "assert_fit_window"
+      }
+    ],
+    "stateless_steps": [
+      "coordinate_normalization",
+      "temporal_alignment",
+      "spatial_alignment",
+      "masking",
+      "feature_construction"
+    ],
+    "periods_transformed_independently": [
+      "train",
+      "val",
+      "test"
+    ],
+    "checks": [
+      "split: train/val/test partition the time axis exactly once",
+      "fit window: 2 learned step(s) fitted on training data only",
+      "isolation: post-split stages ran on test, train, val independently",
+      "tensors: inputs are finite everywhere",
+      "tensors: targets are finite everywhere",
+      "tensors: split sizes {'train': 16, 'val': 4, 'test': 4}"
+    ]
+  },
+  "steps": [
+    {
+      "step": "coordinate_normalization",
+      "title": "Coordinate normalization",
+      "class": "CoordinateNormalizer",
+      "learns_from_data": false,
+      "fitted": true,
+      "fit_summary": {},
+      "config": {
+        "lon_convention": "0-360",
+        "sort_ascending": true,
+        "decimals": 6,
+        "drop_duplicates": true
+      },
+      "state": {},
+      "report": {
+        "converted": {},
+        "reordered": [],
+        "dropped_duplicates": {},
+        "final_ranges": {
+          "lat": [
+            "5.0",
+            "30.0"
+          ],
+          "lon": [
+            "45.0",
+            "105.0"
+          ],
+          "depth": [
+            "0.0",
+            "1000.0"
+          ],
+          "time": [
+            "2020-01-15T00:00:00.000000000",
+            "2021-12-15T00:00:00.000000000"
+          ]
+        }
+      }
+    },
+    {
+      "step": "temporal_alignment",
+      "title": "Temporal alignment",
+      "class": "TemporalAligner",
+      "learns_from_data": false,
+      "fitted": true,
+      "fit_summary": {},
+      "config": {
+        "frequency": "monthly",
+        "aggregation": "mean",
+        "fill_gaps": true,
+        "start": null,
+        "end": null
+      },
+      "state": {},
+      "report": {
+        "frequency": "monthly",
+        "aggregation": "mean",
+        "n_time_in": 24,
+        "n_time_out": 24,
+        "n_collisions": 0,
+        "n_gap_steps_inserted": 0,
+        "time_range": [
+          "2020-01-01T00:00:00.000000000",
+          "2021-12-01T00:00:00.000000000"
+        ],
+        "snapped": true
+      }
+    },
+    {
+      "step": "spatial_alignment",
+      "title": "Spatial alignment",
+      "class": "SpatialAligner",
+      "learns_from_data": false,
+      "fitted": true,
+      "fit_summary": {},
+      "config": {
+        "method": "linear",
+        "mask_method": "nearest",
+        "tolerance": 1e-06,
+        "target_grid": {
+          "resolution_deg": 0.25,
+          "bounds": {
+            "lat_min": 5,
+            "lat_max": 30,
+            "lon_min": 45,
+            "lon_max": 105
+          },
+          "shape": {
+            "n_lat": 101,
+            "n_lon": 241
+          },
+          "n_points": 24341
+        }
+      },
+      "state": {},
+      "report": {
+        "regridded": false,
+        "reason": "source grid already matches the target grid",
+        "grid_shape": [
+          101,
+          241
+        ]
+      }
+    },
+    {
+      "step": "missing_values",
+      "title": "Missing-value handling",
+      "class": "MissingValueHandler",
+      "learns_from_data": true,
+      "fitted": true,
+      "fit_summary": {
+        "n_time": 16,
+        "sizes": {
+          "time": 16,
+          "depth": 15,
+          "lat": 101,
+          "lon": 241
+        },
+        "variables": [
+          "land_mask",
+          "sla",
+          "sss",
+          "sst",
+          "subsurface_temp",
+          "u_current",
+          "u_wind",
+          "v_current",
+          "v_wind"
+        ]
+      },
+      "config": {
+        "strategies": [
+          "temporal_interpolate",
+          "climatology",
+          "global_mean"
+        ],
+        "max_gap": 2,
+        "emit_observed_masks": true,
+        "ocean_only": true,
+        "mask_variable": "land_mask",
+        "variables": null
+      },
+      "state": {
+        "climatology": {
+          "sst": {
+            "shape": [
+              12,
+              101,
+              241
+            ],
+            "dims": [
+              "month",
+              "lat",
+              "lon"
+            ],
+            "n": 292092,
+            "n_finite": 144136,
+            "min": 24.049553,
+            "max": 30.761244,
+            "mean": 28.345102
+          },
+          "sss": {
+            "shape": [
+              12,
+              101,
+              241
+            ],
+            "dims": [
+              "month",
+              "lat",
+              "lon"
+            ],
+            "n": 292092,
+            "n_finite": 144175,
+            "min": 31.766462,
+            "max": 36.312996,
+            "mean": 34.33799
+          },
+          "sla": {
+            "shape": [
+              12,
+              101,
+              241
+            ],
+            "dims": [
+              "month",
+              "lat",
+              "lon"
+            ],
+            "n": 292092,
+            "n_finite": 145624,
+            "min": -0.186525,
+            "max": 0.215373,
+            "mean": 0.006895
+          },
+          "u_current": {
+            "shape": [
+              12,
+              101,
+              241
+            ],
+            "dims": [
+              "month",
+              "lat",
+              "lon"
+            ],
+            "n": 292092,
+            "n_finite": 146454,
+            "min": -0.343863,
+            "max": 0.321963,
+            "mean": -0.007525
+          },
+          "v_current": {
+            "shape": [
+              12,
+              101,
+              241
+            ],
+            "dims": [
+              "month",
+              "lat",
+              "lon"
+            ],
+            "n": 292092,
+            "n_finite": 142302,
+            "min": -0.276579,
+            "max": 0.271563,
+            "mean": -0.000708
+          },
+          "u_wind": {
+            "shape": [
+              12,
+              101,
+              241
+            ],
+            "dims": [
+              "month",
+              "lat",
+              "lon"
+            ],
+            "n": 292092,
+            "n_finite": 146491,
+            "min": -7.490553,
+            "max": 7.411418,
+            "mean": -0.13071
+          },
+          "v_wind": {
+            "shape": [
+              12,
+              101,
+              241
+            ],
+            "dims": [
+              "month",
+              "lat",
+              "lon"
+            ],
+            "n": 292092,
+            "n_finite": 145515,
+            "min": -5.12349,
+            "max": 5.052766,
+            "mean": -0.066959
+          },
+          "subsurface_temp": {
+            "shape": [
+              12,
+              15,
+              101,
+              241
+            ],
+            "dims": [
+              "month",
+              "depth",
+              "lat",
+              "lon"
+            ],
+            "n": 4381380,
+            "n_finite": 1251494,
+            "min": 3.85,
+            "max": 30.558237,
+            "mean": 16.41765
+          }
+        },
+        "global_mean": {
+          "sst": {
+            "n": 1,
+            "n_finite": 1,
+            "min": 28.386421,
+            "max": 28.386421,
+            "mean": 28.386421
+          },
+          "sss": {
+            "n": 1,
+            "n_finite": 1,
+            "min": 34.373848,
+            "max": 34.373848,
+            "mean": 34.373848
+          },
+          "sla": {
+            "n": 1,
+            "n_finite": 1,
+            "min": 0.006484,
+            "max": 0.006484,
+            "mean": 0.006484
+          },
+          "u_current": {
+            "n": 1,
+            "n_finite": 1,
+            "min": -0.013024,
+            "max": -0.013024,
+            "mean": -0.013024
+          },
+          "v_current": {
+            "n": 1,
+            "n_finite": 1,
+            "min": -0.003603,
+            "max": -0.003603,
+            "mean": -0.003603
+          },
+          "u_wind": {
+            "n": 1,
+            "n_finite": 1,
+            "min": -0.919587,
+            "max": -0.919587,
+            "mean": -0.919587
+          },
+          "v_wind": {
+            "n": 1,
+            "n_finite": 1,
+            "min": -0.567784,
+            "max": -0.567784,
+            "mean": -0.567784
+          },
+          "subsurface_temp": {
+            "n": 15,
+            "n_finite": 15,
+            "min": 3.997847,
+            "max": 28.255033,
+            "mean": 16.392694
+          }
+        }
+      },
+      "report": {
+        "variables": {
+          "sst": {
+            "missing_before": 51023,
+            "fillable": 6363,
+            "filled_temporal_interpolate": 2848,
+            "filled_climatology": 2459,
+            "filled_global_mean": 1056,
+            "missing_after": 44660,
+            "missing_after_fillable": 0,
+            "n_filled": 6363,
+            "fill_fraction": 0.0653527
+          },
+          "sss": {
+            "missing_before": 51298,
+            "fillable": 6638,
+            "filled_temporal_interpolate": 2265,
+            "filled_climatology": 3547,
+            "filled_global_mean": 826,
+            "missing_after": 44660,
+            "missing_after_fillable": 0,
+            "n_filled": 6638,
+            "fill_fraction": 0.06817715
+          },
+          "sla": {
+            "missing_before": 50342,
+            "fillable": 5682,
+            "filled_temporal_interpolate": 2259,
+            "filled_climatology": 2816,
+            "filled_global_mean": 607,
+            "missing_after": 44660,
+            "missing_after_fillable": 0,
+            "n_filled": 5682,
+            "fill_fraction": 0.05835833
+          },
+          "u_current": {
+            "missing_before": 51659,
+            "fillable": 6999,
+            "filled_temporal_interpolate": 4040,
+            "filled_climatology": 2539,
+            "filled_global_mean": 420,
+            "missing_after": 44660,
+            "missing_after_fillable": 0,
+            "n_filled": 6999,
+            "fill_fraction": 0.07188489
+          },
+          "v_current": {
+            "missing_before": 52425,
+            "fillable": 7765,
+            "filled_temporal_interpolate": 3286,
+            "filled_climatology": 3353,
+            "filled_global_mean": 1126,
+            "missing_after": 44660,
+            "missing_after_fillable": 0,
+            "n_filled": 7765,
+            "fill_fraction": 0.07975227
+          },
+          "u_wind": {
+            "missing_before": 49462,
+            "fillable": 4802,
+            "filled_temporal_interpolate": 2755,
+            "filled_climatology": 1930,
+            "filled_global_mean": 117,
+            "missing_after": 44660,
+            "missing_after_fillable": 0,
+            "n_filled": 4802,
+            "fill_fraction": 0.04932008
+          },
+          "v_wind": {
+            "missing_before": 52383,
+            "fillable": 7723,
+            "filled_temporal_interpolate": 3527,
+            "filled_climatology": 3661,
+            "filled_global_mean": 535,
+            "missing_after": 44660,
+            "missing_after_fillable": 0,
+            "n_filled": 7723,
+            "fill_fraction": 0.0793209
+          },
+          "subsurface_temp": {
+            "missing_before": 1098366,
+            "fillable": 428466,
+            "filled_temporal_interpolate": 70850,
+            "filled_climatology": 163438,
+            "filled_global_mean": 194178,
+            "missing_after": 669900,
+            "missing_after_fillable": 0,
+            "n_filled": 428466,
+            "fill_fraction": 0.29337743
+          }
+        },
+        "ocean_only": true
+      }
+    },
+    {
+      "step": "masking",
+      "title": "Masking",
+      "class": "Masker",
+      "learns_from_data": false,
+      "fitted": true,
+      "fit_summary": {},
+      "config": {
+        "mask_variable": "land_mask",
+        "land_fill_value": null,
+        "apply_to_variables": true,
+        "publish_ocean_mask": true,
+        "keep_source_mask": true
+      },
+      "state": {},
+      "report": {
+        "variables": {
+          "sst": {
+            "n_cells": 97364,
+            "n_ocean_cells": 52704,
+            "valid_fraction_over_ocean": 1.0,
+            "observed_fraction_over_ocean": 0.879269
+          },
+          "sss": {
+            "n_cells": 97364,
+            "n_ocean_cells": 52704,
+            "valid_fraction_over_ocean": 1.0,
+            "observed_fraction_over_ocean": 0.874051
+          },
+          "sla": {
+            "n_cells": 97364,
+            "n_ocean_cells": 52704,
+            "valid_fraction_over_ocean": 1.0,
+            "observed_fraction_over_ocean": 0.89219
+          },
+          "u_current": {
+            "n_cells": 97364,
+            "n_ocean_cells": 52704,
+            "valid_fraction_over_ocean": 1.0,
+            "observed_fraction_over_ocean": 0.867202
+          },
+          "v_current": {
+            "n_cells": 97364,
+            "n_ocean_cells": 52704,
+            "valid_fraction_over_ocean": 1.0,
+            "observed_fraction_over_ocean": 0.852668
+          },
+          "u_wind": {
+            "n_cells": 97364,
+            "n_ocean_cells": 52704,
+            "valid_fraction_over_ocean": 1.0,
+            "observed_fraction_over_ocean": 0.908887
+          },
+          "v_wind": {
+            "n_cells": 97364,
+            "n_ocean_cells": 52704,
+            "valid_fraction_over_ocean": 1.0,
+            "observed_fraction_over_ocean": 0.853465
+          },
+          "subsurface_temp": {
+            "n_cells": 1460460,
+            "n_ocean_cells": 790560,
+            "valid_fraction_over_ocean": 1.0,
+            "observed_fraction_over_ocean": 0.458022
+          }
+        },
+        "ocean_cells": 13176,
+        "land_cells": 11165,
+        "ocean_fraction": 0.541309
+      }
+    },
+    {
+      "step": "feature_construction",
+      "title": "Feature construction",
+      "class": "FeatureBuilder",
+      "learns_from_data": false,
+      "fitted": true,
+      "fit_summary": {},
+      "config": {
+        "features": [
+          "cyclic_time",
+          "position"
+        ],
+        "overwrite": false,
+        "period_days": 365.25
+      },
+      "state": {},
+      "report": {
+        "built": [
+          "time_sin",
+          "time_cos",
+          "lat_norm",
+          "lon_norm"
+        ],
+        "skipped": {}
+      }
+    },
+    {
+      "step": "normalization",
+      "title": "Normalization",
+      "class": "Normalizer",
+      "learns_from_data": true,
+      "fitted": true,
+      "fit_summary": {
+        "n_time": 16,
+        "sizes": {
+          "time": 16,
+          "depth": 15,
+          "lat": 101,
+          "lon": 241
+        },
+        "variables": [
+          "land_mask",
+          "lat_norm",
+          "lon_norm",
+          "ocean_mask",
+          "sla",
+          "sla_observed",
+          "sss",
+          "sss_observed",
+          "sst",
+          "sst_observed",
+          "subsurface_temp",
+          "subsurface_temp_observed",
+          "time_cos",
+          "time_sin",
+          "u_current",
+          "u_current_observed",
+          "u_wind",
+          "u_wind_observed",
+          "v_current",
+          "v_current_observed",
+          "v_wind",
+          "v_wind_observed"
+        ]
+      },
+      "config": {
+        "method": "zscore",
+        "per_depth_level": true,
+        "variables": null,
+        "exclude": [
+          "time_sin",
+          "time_cos",
+          "lat_norm",
+          "lon_norm"
+        ]
+      },
+      "state": {
+        "method": "zscore",
+        "statistics": {
+          "sst": {
+            "center": [
+              28.376676559448242
+            ],
+            "scale": [
+              1.1660850048065186
+            ],
+            "per_depth_level": false,
+            "units": "degC",
+            "mean": [
+              28.376676559448242
+            ],
+            "std": [
+              1.1660850048065186
+            ]
+          },
+          "sss": {
+            "center": [
+              34.37665557861328
+            ],
+            "scale": [
+              1.1078096628189087
+            ],
+            "per_depth_level": false,
+            "units": "psu",
+            "mean": [
+              34.37665557861328
+            ],
+            "std": [
+              1.1078096628189087
+            ]
+          },
+          "sla": {
+            "center": [
+              0.007198059465736151
+            ],
+            "scale": [
+              0.04114557057619095
+            ],
+            "per_depth_level": false,
+            "units": "m",
+            "mean": [
+              0.007198059465736151
+            ],
+            "std": [
+              0.04114557057619095
+            ]
+          },
+          "u_current": {
+            "center": [
+              -0.012094196863472462
+            ],
+            "scale": [
+              0.06645742058753967
+            ],
+            "per_depth_level": false,
+            "units": "m/s",
+            "mean": [
+              -0.012094196863472462
+            ],
+            "std": [
+              0.06645742058753967
+            ]
+          },
+          "v_current": {
+            "center": [
+              -0.004176723305135965
+            ],
+            "scale": [
+              0.053332243114709854
+            ],
+            "per_depth_level": false,
+            "units": "m/s",
+            "mean": [
+              -0.004176723305135965
+            ],
+            "std": [
+              0.053332243114709854
+            ]
+          },
+          "u_wind": {
+            "center": [
+              -0.9384440779685974
+            ],
+            "scale": [
+              4.113170146942139
+            ],
+            "per_depth_level": false,
+            "units": "m/s",
+            "mean": [
+              -0.9384440779685974
+            ],
+            "std": [
+              4.113170146942139
+            ]
+          },
+          "v_wind": {
+            "center": [
+              -0.5999441742897034
+            ],
+            "scale": [
+              2.7362353801727295
+            ],
+            "per_depth_level": false,
+            "units": "m/s",
+            "mean": [
+              -0.5999441742897034
+            ],
+            "std": [
+              2.7362353801727295
+            ]
+          },
+          "subsurface_temp": {
+            "center": [
+              28.237436294555664,
+              28.23648452758789,
+              28.184823989868164,
+              28.004968643188477,
+              27.81892204284668,
+              26.695348739624023,
+              23.21949005126953,
+              17.301076889038086,
+              10.809435844421387,
+              6.672354221343994,
+              4.197792053222656,
+              3.9982833862304688,
+              4.000234127044678,
+              4.0009660720825195,
+              3.9979963302612305
+            ],
+            "scale": [
+              0.9329466819763184,
+              0.8846341371536255,
+              0.8488789200782776,
+              0.8215250372886658,
+              0.7696433067321777,
+              0.8951043486595154,
+              2.560011386871338,
+              4.432545185089111,
+              4.098963260650635,
+              2.063687324523926,
+              0.180587038397789,
+              0.03214903548359871,
+              0.03327220305800438,
+              0.033304743468761444,
+              0.03584253042936325
+            ],
+            "per_depth_level": true,
+            "units": "degC",
+            "mean": [
+              28.237436294555664,
+              28.23648452758789,
+              28.184823989868164,
+              28.004968643188477,
+              27.81892204284668,
+              26.695348739624023,
+              23.21949005126953,
+              17.301076889038086,
+              10.809435844421387,
+              6.672354221343994,
+              4.197792053222656,
+              3.9982833862304688,
+              4.000234127044678,
+              4.0009660720825195,
+              3.9979963302612305
+            ],
+            "std": [
+              0.9329466819763184,
+              0.8846341371536255,
+              0.8488789200782776,
+              0.8215250372886658,
+              0.7696433067321777,
+              0.8951043486595154,
+              2.560011386871338,
+              4.432545185089111,
+              4.098963260650635,
+              2.063687324523926,
+              0.180587038397789,
+              0.03214903548359871,
+              0.03327220305800438,
+              0.033304743468761444,
+              0.03584253042936325
+            ]
+          }
+        }
+      },
+      "report": {
+        "method": "zscore",
+        "normalized": [
+          "sst",
+          "sss",
+          "sla",
+          "u_current",
+          "v_current",
+          "u_wind",
+          "v_wind",
+          "subsurface_temp"
+        ]
+      }
+    },
+    {
+      "step": "tensor_assembly",
+      "title": "Tensor assembly",
+      "class": "TensorAssembler",
+      "learns_from_data": false,
+      "config": {
+        "input_variables": [
+          "sst",
+          "sss",
+          "sla",
+          "u_current",
+          "v_current",
+          "u_wind",
+          "v_wind",
+          "time_sin",
+          "time_cos",
+          "lat_norm",
+          "lon_norm"
+        ],
+        "target_variables": [
+          "subsurface_temp"
+        ],
+        "fill_value": 0.0,
+        "dtype": "float32",
+        "require_observed_masks": true
+      },
+      "report": {
+        "inputs": {
+          "shape": [
+            24,
+            11,
+            101,
+            241
+          ],
+          "dtype": "float32",
+          "layout": "(time, channel, lat, lon)",
+          "channels": [
+            "sst",
+            "sss",
+            "sla",
+            "u_current",
+            "v_current",
+            "u_wind",
+            "v_wind",
+            "time_sin",
+            "time_cos",
+            "lat_norm",
+            "lon_norm"
+          ],
+          "valid_fraction": 0.499247,
+          "all_finite": true
+        },
+        "time_range": [
+          "2020-01-01T00:00:00.000000000",
+          "2021-12-01T00:00:00.000000000"
+        ],
+        "grid_shape": [
+          101,
+          241
+        ],
+        "split_counts": {
+          "train": 16,
+          "val": 4,
+          "test": 4
+        },
+        "targets": {
+          "shape": [
+            24,
+            15,
+            101,
+            241
+          ],
+          "dtype": "float32",
+          "layout": "(time, depth, lat, lon)",
+          "variables": [
+            "subsurface_temp"
+          ],
+          "valid_fraction": 0.242832,
+          "all_finite": true
+        },
+        "ocean_fraction": 0.541309
+      }
+    }
+  ],
+  "tensors": {
+    "inputs": {
+      "shape": [
+        24,
+        11,
+        101,
+        241
+      ],
+      "dtype": "float32",
+      "layout": "(time, channel, lat, lon)",
+      "channels": [
+        "sst",
+        "sss",
+        "sla",
+        "u_current",
+        "v_current",
+        "u_wind",
+        "v_wind",
+        "time_sin",
+        "time_cos",
+        "lat_norm",
+        "lon_norm"
+      ],
+      "valid_fraction": 0.499247,
+      "all_finite": true
+    },
+    "time_range": [
+      "2020-01-01T00:00:00.000000000",
+      "2021-12-01T00:00:00.000000000"
+    ],
+    "grid_shape": [
+      101,
+      241
+    ],
+    "split_counts": {
+      "train": 16,
+      "val": 4,
+      "test": 4
+    },
+    "targets": {
+      "shape": [
+        24,
+        15,
+        101,
+        241
+      ],
+      "dtype": "float32",
+      "layout": "(time, depth, lat, lon)",
+      "variables": [
+        "subsurface_temp"
+      ],
+      "valid_fraction": 0.242832,
+      "all_finite": true
+    },
+    "ocean_fraction": 0.541309
+  },
+  "outputs": {
+    "tensors": "/home/claude/neer_project/NEER/data/processed/neer_tensors.npz",
+    "tensor_bytes": 21194244,
+    "metadata": "/home/claude/neer_project/NEER/data/processed/neer_preprocessing_metadata.json"
+  },
+  "notes": [
+    "SYNTHETIC DATA: these tensors derive from the NEER demo dataset and must not be used for any scientific purpose or presented as results.",
+    "This dataset is entirely SYNTHETIC. It was generated by scripts/create_demo_data.py from closed-form formulas and seeded random noise. It is NOT satellite data, NOT ARGO float data, NOT reanalysis, and has NOT undergone any scientific validation. It exists solely to exercise the NEER pipeline/UI end-to-end before real data is integrated. Do not use it for any scientific purpose."
+  ]
+}
